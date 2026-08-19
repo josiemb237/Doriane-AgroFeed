@@ -1,0 +1,611 @@
+* {
+    box-sizing: border-box;
+}
+
+
+body {
+    margin: 0;
+
+    padding: 30px;
+
+    background: #202124;
+
+    font-family:
+        Arial,
+        Helvetica,
+        sans-serif;
+
+    color: #333;
+}
+
+
+/* =====================================================
+   FEUILLE A4
+===================================================== */
+
+.facture {
+
+    width: 210mm;
+
+    min-height: 297mm;
+
+    margin: 0 auto;
+
+    padding: 18mm;
+
+    background: white;
+
+    border-radius: 18px;
+
+    box-shadow:
+        0 8px 30px
+        rgba(0, 0, 0, 0.25);
+
+}
+
+
+/* =====================================================
+   TITRE FACTURE
+===================================================== */
+
+.titre-facture {
+
+    height: 60px;
+
+    display: flex;
+
+    align-items: center;
+
+    justify-content: center;
+
+    gap: 10px;
+
+    background: #f7dfcc;
+
+    font-size: 28px;
+
+    font-weight: 800;
+
+    letter-spacing: 5px;
+
+    margin-bottom: 20px;
+
+    color: #222;
+}
+
+
+.titre-facture span {
+
+    font-size: 22px;
+
+    letter-spacing: 2px;
+
+}
+
+
+/* =====================================================
+   ENTÊTE
+===================================================== */
+
+.entete {
+
+    display: grid;
+
+    grid-template-columns:
+        1fr 1fr;
+
+    gap: 25px;
+
+    margin-bottom: 30px;
+
+}
+
+
+.entreprise {
+
+    padding: 10px;
+
+}
+
+
+.entreprise h1 {
+
+    margin: 0 0 10px;
+
+    font-size: 20px;
+
+    color: #198754;
+
+}
+
+
+.entreprise p {
+
+    margin: 5px 0;
+
+    font-size: 13px;
+
+    line-height: 1.4;
+
+}
+
+
+/* =====================================================
+   CLIENT
+===================================================== */
+
+.client-box {
+
+    border:
+        1px solid #ddd;
+
+    padding: 15px;
+
+    min-height: 125px;
+
+}
+
+
+.client-box h3 {
+
+    margin: 0 0 12px;
+
+    font-size: 13px;
+
+    background: #f7dfcc;
+
+    padding: 8px;
+
+}
+
+
+.client-box p {
+
+    margin: 6px 0;
+
+    font-size: 12px;
+
+}
+
+
+/* =====================================================
+   INFORMATIONS COMMANDE
+===================================================== */
+
+.infos-commande {
+
+    width: 55%;
+
+    background: #f7dfcc;
+
+    padding: 13px;
+
+    margin-bottom: 25px;
+
+}
+
+
+.infos-commande div {
+
+    font-size: 12px;
+
+    margin: 5px 0;
+
+}
+
+
+/* =====================================================
+   TABLEAU
+===================================================== */
+
+.table-facture {
+
+    width: 100%;
+
+    border-collapse: collapse;
+
+    margin-top: 10px;
+
+}
+
+
+.table-facture th {
+
+    background: #f7dfcc;
+
+    border:
+        1px solid #d9d9d9;
+
+    padding: 11px;
+
+    font-size: 12px;
+
+    text-align: left;
+
+}
+
+
+.table-facture td {
+
+    border:
+        1px solid #dedede;
+
+    padding: 12px;
+
+    font-size: 12px;
+
+    height: 42px;
+
+}
+
+
+.col-quantite {
+
+    width: 16%;
+
+    text-align: center !important;
+
+}
+
+
+.col-prix {
+
+    width: 23%;
+
+}
+
+
+.col-total {
+
+    width: 23%;
+
+}
+
+
+.quantite-cell {
+
+    text-align: center;
+
+    font-weight: bold;
+
+}
+
+
+.prix-cell {
+
+    text-align: right;
+
+    white-space: nowrap;
+
+}
+
+
+.montant-cell {
+
+    text-align: right;
+
+    white-space: nowrap;
+
+    font-weight: bold;
+
+}
+
+
+.aucun-produit {
+
+    text-align: center;
+
+    padding: 30px !important;
+
+}
+
+
+/* =====================================================
+   ZONE TOTAL
+===================================================== */
+
+.total-zone {
+
+    display: flex;
+
+    justify-content: flex-end;
+
+    margin-top: 20px;
+
+}
+
+
+.total-box {
+
+    width: 280px;
+
+}
+
+
+.ligne-total {
+
+    display: flex;
+
+    justify-content: space-between;
+
+    padding: 7px 0;
+
+    font-size: 13px;
+
+}
+
+
+.total-final {
+
+    display: flex;
+
+    justify-content: space-between;
+
+    padding: 12px 0;
+
+    margin-top: 5px;
+
+    border-top:
+        2px solid #333;
+
+    font-size: 16px;
+
+    font-weight: bold;
+
+}
+
+
+.total-final strong {
+
+    color: #198754;
+
+}
+
+
+/* =====================================================
+   STATUT
+===================================================== */
+
+.statut {
+
+    margin-top: 25px;
+
+    padding: 10px;
+
+    background: #f1f8f4;
+
+    border:
+        1px solid #cce5d5;
+
+    color: #198754;
+
+    font-size: 12px;
+
+}
+
+
+/* =====================================================
+   MESSAGE
+===================================================== */
+
+.message {
+
+    margin-top: 55px;
+
+    font-size: 12px;
+
+    color: #555;
+
+    line-height: 1.6;
+
+}
+
+
+/* =====================================================
+   SIGNATURE
+===================================================== */
+
+.signature {
+
+    display: grid;
+
+    grid-template-columns:
+        1fr 1fr;
+
+    gap: 80px;
+
+    margin-top: 45px;
+
+    font-size: 12px;
+
+}
+
+
+.signature > div {
+
+    border-top:
+        1px solid #aaa;
+
+    padding-top: 8px;
+
+    min-height: 50px;
+
+}
+
+
+/* =====================================================
+   BOUTON IMPRIMER
+===================================================== */
+
+.zone-impression {
+
+    width: 210mm;
+
+    margin: 20px auto;
+
+    text-align: center;
+
+}
+
+
+.btn-imprimer {
+
+    border: none;
+
+    background: #198754;
+
+    color: white;
+
+    padding: 13px 25px;
+
+    border-radius: 8px;
+
+    font-size: 15px;
+
+    font-weight: bold;
+
+    cursor: pointer;
+
+    box-shadow:
+        0 5px 15px
+        rgba(0,0,0,0.2);
+
+    transition: 0.2s;
+
+}
+
+
+.btn-imprimer:hover {
+
+    background: #146c43;
+
+    transform:
+        translateY(-2px);
+
+}
+
+
+.btn-imprimer i {
+
+    margin-right: 8px;
+
+}
+
+
+/* =====================================================
+   IMPRESSION
+===================================================== */
+
+@media print {
+
+    @page {
+
+        size: A4 portrait;
+
+        margin: 0;
+
+    }
+
+
+    body {
+
+        background: white;
+
+        padding: 0;
+
+    }
+
+
+    .facture {
+
+        width: 210mm;
+
+        min-height: 297mm;
+
+        margin: 0;
+
+        padding: 15mm;
+
+        border-radius: 0;
+
+        box-shadow: none;
+
+    }
+
+
+    .zone-impression {
+
+        display: none;
+
+    }
+
+}
+
+
+/* =====================================================
+   PETITS ÉCRANS
+===================================================== */
+
+@media screen and (max-width: 800px) {
+
+    body {
+
+        padding: 10px;
+
+    }
+
+
+    .facture {
+
+        width: 100%;
+
+        min-height: auto;
+
+        padding: 20px;
+
+    }
+
+
+    .entete {
+
+        grid-template-columns: 1fr;
+
+    }
+
+
+    .infos-commande {
+
+        width: 100%;
+
+    }
+
+
+    .table-facture {
+
+        font-size: 11px;
+
+    }
+
+
+    .table-facture th,
+    .table-facture td {
+
+        padding: 8px;
+
+    }
+
+
+    .zone-impression {
+
+        width: 100%;
+
+    }
+
+
+    .signature {
+
+        gap: 20px;
+
+    }
+
+}
