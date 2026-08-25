@@ -1,3 +1,6 @@
+body{
+     background:url("../provenderie/5l6uBYVds32fq69mHmG1xzSnDtwwZIV_4IeWfwQ1un6lPgvW6R2GiG2rfiX2UEE7a82sAKzgXsZZwJqJQFFWsz6QG8QcG5-rsifleW3-suZIbYrCwTZB9oZRzrs7R-p9mLDwfbFPiInop_u17MYVk-Gz96n12VHP71e6D8P49c0.jpeg") center center/cover no-repeat;
+}
 .navbar{
     padding:15px 0;
 }
@@ -154,7 +157,8 @@ nav a {
     display:flex;
 
     justify-content:center;
-
+      
+    min-height:100vh;
     align-items:center;
      text-align: center;
     gap:60px;

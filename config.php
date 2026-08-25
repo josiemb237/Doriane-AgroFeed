@@ -6,4 +6,6 @@
     }  else{
         //    echo "connexion reussi";
     }
-?>    
+
+session_start();
+?>

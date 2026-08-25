@@ -133,9 +133,6 @@ function formatFCFA($montant) {
             <a href="dashboard.php"><i class="bi bi-speedometer2"></i> Tableau de bord</a>
         </li>
         <li>
-            <a href="gestion_site.php"><i class="bi bi-gear-fill"></i> Gestion du site</a>
-        </li>
-        <li>
             <a href="clients.php"><i class="bi bi-people-fill"></i> Clients</a>
         </li>
         <li>

@@ -62,9 +62,6 @@ session_start ();
                     <a class="nav-link active px-3" href="contact.php">Contact</a>
                 </li>
                 
-                <li class="nav-item">
-                    <a class="nav-link active px-3" href="comande.php">Comande</a>
-                </li>
 
             </ul>
 
@@ -148,7 +145,7 @@ de qualité, des vitamines et des compléments nutritionnels
 pour les volailles, bovins, porcs, lapins et poissons.
 </p>
 
-<a href="commande.php" class="btn btn-warning btn-lg me-3">
+<a href="produit.php" class="btn btn-warning btn-lg me-3">
 Commander
 </a>
 

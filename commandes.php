@@ -2,110 +2,176 @@
 
 require_once "connexions.php";
 
+/* =========================================================
+   TRAITEMENT DES ACTIONS
+========================================================= */
 
 if (
-    isset($_GET["action"])
-    &&
-    $_GET["action"] === "statut"
-    &&
+    isset($_GET["action"]) &&
     isset($_GET["id"])
-    &&
-    isset($_GET["valeur"])
 ) {
 
-    $idCommande =
-        intval($_GET["id"]);
-
-    $statut =
-        $_GET["valeur"];
+    $action = $_GET["action"];
+    $idCommande = (int) $_GET["id"];
 
 
-    $statutsAutorises = [
-        "En attente",
-        "Confirmée",
-        "En préparation",
-        "Livrée",
-        "Annulée"
-    ];
-
+    /* =====================================================
+       CONFIRMER UNE COMMANDE
+    ===================================================== */
 
     if (
-        $idCommande > 0
-        &&
-        in_array(
-            $statut,
-            $statutsAutorises,
-            true
-        )
+        $action === "statut" &&
+        isset($_GET["valeur"]) &&
+        $_GET["valeur"] === "Confirmée"
     ) {
 
-        $stmt = $pdo->prepare("
-            UPDATE commande
-            SET statut = ?
-            WHERE id_commande = ?
-        ");
+        if ($idCommande <= 0) {
+            header("Location: commandes.php");
+            exit;
+        }
 
-        $stmt->execute([
-            $statut,
-            $idCommande
-        ]);
-    }
-
-
-    header(
-        "Location: commandes.php"
-    );
-
-    exit;
-}
-if (
-    isset($_GET["action"])
-    &&
-    $_GET["action"] === "supprimer"
-    &&
-    isset($_GET["id"])
-) {
-
-    $idCommande =
-        intval($_GET["id"]);
-
-
-    if ($idCommande > 0) {
 
         try {
 
             $pdo->beginTransaction();
 
 
-            /* -----------------------------------------
-               Récupérer les lignes pour remettre le stock
-            ----------------------------------------- */
+            /* ---------------------------------------------
+               Récupérer la commande
+            --------------------------------------------- */
+
+            $stmtCommande = $pdo->prepare("
+                SELECT
+                    id_commande,
+                    statut
+                FROM commande
+                WHERE id_commande = ?
+                FOR UPDATE
+            ");
+
+            $stmtCommande->execute([
+                $idCommande
+            ]);
+
+            $commande = $stmtCommande->fetch(
+                PDO::FETCH_ASSOC
+            );
+
+
+            if (!$commande) {
+
+                throw new Exception(
+                    "Commande introuvable."
+                );
+            }
+
+
+            /* ---------------------------------------------
+               Vérifier si elle est déjà confirmée
+            --------------------------------------------- */
+
+            if ($commande["statut"] === "Confirmée") {
+
+                $pdo->commit();
+
+                header(
+                    "Location: commandes.php"
+                );
+
+                exit;
+            }
+
+
+            /* ---------------------------------------------
+               Récupérer les produits
+            --------------------------------------------- */
 
             $stmtLignes = $pdo->prepare("
                 SELECT
-                    id_produit,
-                    quantite
-                FROM ligne_commande
-                WHERE id_commande = ?
+                    lc.id_produit,
+                    lc.quantite,
+                    lc.prix_unitaire,
+                    lc.sous_total,
+                    p.nom_produit,
+                    p.stock
+                FROM ligne_commande lc
+
+                INNER JOIN produit p
+                    ON lc.id_produit = p.id_produit
+
+                WHERE lc.id_commande = ?
+
+                FOR UPDATE
             ");
 
             $stmtLignes->execute([
                 $idCommande
             ]);
 
-            $lignes =
-                $stmtLignes->fetchAll(
-                    PDO::FETCH_ASSOC
+            $lignes = $stmtLignes->fetchAll(
+                PDO::FETCH_ASSOC
+            );
+
+
+            if (empty($lignes)) {
+
+                throw new Exception(
+                    "Cette commande ne contient aucun produit."
                 );
+            }
 
 
-            /* -----------------------------------------
-               Remettre les produits dans le stock
-            ----------------------------------------- */
+            /* ---------------------------------------------
+               Vérifier le stock
+            --------------------------------------------- */
+
+            foreach ($lignes as $ligne) {
+
+                $quantite = (int) $ligne["quantite"];
+                $stock = (int) $ligne["stock"];
+
+
+                if ($quantite <= 0) {
+
+                    throw new Exception(
+                        "Quantité invalide pour le produit : "
+                        . $ligne["nom_produit"]
+                    );
+                }
+
+
+                if ($quantite > $stock) {
+
+                    throw new Exception(
+                        "Stock insuffisant pour : "
+                        . $ligne["nom_produit"]
+                        . ". Stock disponible : "
+                        . $stock
+                    );
+                }
+            }
+
+
+            /* ---------------------------------------------
+               Calcul du montant total
+            --------------------------------------------- */
+
+            $montantTotal = 0;
+
+            foreach ($lignes as $ligne) {
+
+                $montantTotal +=
+                    (float) $ligne["sous_total"];
+            }
+
+
+            /* ---------------------------------------------
+               Diminuer le stock
+            --------------------------------------------- */
 
             $stmtStock = $pdo->prepare("
                 UPDATE produit
-                SET stock = stock + ?
+                SET stock = stock - ?
                 WHERE id_produit = ?
             ");
 
@@ -113,55 +179,401 @@ if (
             foreach ($lignes as $ligne) {
 
                 $stmtStock->execute([
-                    $ligne["quantite"],
-                    $ligne["id_produit"]
+                    (int) $ligne["quantite"],
+                    (int) $ligne["id_produit"]
                 ]);
             }
-            $stmtDeleteLignes =
-                $pdo->prepare("
-                    DELETE FROM ligne_commande
-                    WHERE id_commande = ?
-                ");
 
-            $stmtDeleteLignes->execute([
-                $idCommande
-            ]);
-            $stmtDeleteCommande =
-                $pdo->prepare("
-                    DELETE FROM commande
-                    WHERE id_commande = ?
-                ");
 
-            $stmtDeleteCommande->execute([
+            /* ---------------------------------------------
+               Changer le statut
+            --------------------------------------------- */
+
+            $stmtStatut = $pdo->prepare("
+                UPDATE commande
+                SET statut = 'Confirmée'
+                WHERE id_commande = ?
+            ");
+
+            $stmtStatut->execute([
                 $idCommande
             ]);
 
+
+            /* ---------------------------------------------
+               Vérifier si une vente existe déjà
+            --------------------------------------------- */
+
+            $stmtVenteExiste = $pdo->prepare("
+                SELECT id_vente
+                FROM vente
+                WHERE id_commande = ?
+                LIMIT 1
+            ");
+
+            $stmtVenteExiste->execute([
+                $idCommande
+            ]);
+
+            $venteExiste = $stmtVenteExiste->fetch(
+                PDO::FETCH_ASSOC
+            );
+
+
+            /* ---------------------------------------------
+               Ajouter la vente
+            --------------------------------------------- */
+
+            if (!$venteExiste) {
+
+                $stmtVente = $pdo->prepare("
+                    INSERT INTO vente
+                    (
+                        id_commande,
+                        montant
+                    )
+                    VALUES (?, ?)
+                ");
+
+                $stmtVente->execute([
+                    $idCommande,
+                    $montantTotal
+                ]);
+            }
+
+
+            /* ---------------------------------------------
+               Validation transaction
+            --------------------------------------------- */
 
             $pdo->commit();
 
 
-        } catch (Exception $e) {
+            header(
+                "Location: commandes.php?success=confirmation"
+            );
+
+            exit;
+
+
+        } catch (Throwable $e) {
 
             if ($pdo->inTransaction()) {
                 $pdo->rollBack();
             }
 
-            die(
-                "Erreur lors de la suppression : "
-                . htmlspecialchars(
-                    $e->getMessage()
-                )
+
+            header(
+                "Location: commandes.php?error="
+                . urlencode($e->getMessage())
             );
+
+            exit;
         }
     }
 
 
-    header(
-        "Location: commandes.php"
-    );
+    /* =====================================================
+       REMETTRE UNE COMMANDE EN ATTENTE
+    ===================================================== */
 
-    exit;
+    if (
+        $action === "statut" &&
+        isset($_GET["valeur"]) &&
+        $_GET["valeur"] === "En attente"
+    ) {
+
+        if ($idCommande > 0) {
+
+            try {
+
+                $pdo->beginTransaction();
+
+
+                /* -----------------------------------------
+                   Vérifier la commande
+                ----------------------------------------- */
+
+                $stmt = $pdo->prepare("
+                    SELECT
+                        statut
+                    FROM commande
+                    WHERE id_commande = ?
+                    FOR UPDATE
+                ");
+
+                $stmt->execute([
+                    $idCommande
+                ]);
+
+                $commande = $stmt->fetch(
+                    PDO::FETCH_ASSOC
+                );
+
+
+                if (!$commande) {
+
+                    throw new Exception(
+                        "Commande introuvable."
+                    );
+                }
+
+
+                /* -----------------------------------------
+                   Si elle était confirmée,
+                   remettre le stock
+                ----------------------------------------- */
+
+                if ($commande["statut"] === "Confirmée") {
+
+
+                    $stmtLignes = $pdo->prepare("
+                        SELECT
+                            id_produit,
+                            quantite
+                        FROM ligne_commande
+                        WHERE id_commande = ?
+                    ");
+
+                    $stmtLignes->execute([
+                        $idCommande
+                    ]);
+
+                    $lignes = $stmtLignes->fetchAll(
+                        PDO::FETCH_ASSOC
+                    );
+
+
+                    $stmtStock = $pdo->prepare("
+                        UPDATE produit
+                        SET stock = stock + ?
+                        WHERE id_produit = ?
+                    ");
+
+
+                    foreach ($lignes as $ligne) {
+
+                        $stmtStock->execute([
+                            (int) $ligne["quantite"],
+                            (int) $ligne["id_produit"]
+                        ]);
+                    }
+
+
+                    /* Supprimer la vente */
+
+                    $stmtVente = $pdo->prepare("
+                        DELETE FROM vente
+                        WHERE id_commande = ?
+                    ");
+
+                    $stmtVente->execute([
+                        $idCommande
+                    ]);
+                }
+
+
+                /* -----------------------------------------
+                   Remettre en attente
+                ----------------------------------------- */
+
+                $stmtUpdate = $pdo->prepare("
+                    UPDATE commande
+                    SET statut = 'En attente'
+                    WHERE id_commande = ?
+                ");
+
+                $stmtUpdate->execute([
+                    $idCommande
+                ]);
+
+
+                $pdo->commit();
+
+
+            } catch (Throwable $e) {
+
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+
+                header(
+                    "Location: commandes.php?error="
+                    . urlencode($e->getMessage())
+                );
+
+                exit;
+            }
+        }
+
+
+        header(
+            "Location: commandes.php"
+        );
+
+        exit;
+    }
+
+
+    /* =====================================================
+       SUPPRIMER UNE COMMANDE
+    ===================================================== */
+
+    if ($action === "supprimer") {
+
+        if ($idCommande > 0) {
+
+            try {
+
+                $pdo->beginTransaction();
+
+
+                /* -----------------------------------------
+                   Vérifier le statut
+                ----------------------------------------- */
+
+                $stmtCommande = $pdo->prepare("
+                    SELECT
+                        statut
+                    FROM commande
+                    WHERE id_commande = ?
+                    FOR UPDATE
+                ");
+
+                $stmtCommande->execute([
+                    $idCommande
+                ]);
+
+                $commande = $stmtCommande->fetch(
+                    PDO::FETCH_ASSOC
+                );
+
+
+                if (!$commande) {
+
+                    throw new Exception(
+                        "Commande introuvable."
+                    );
+                }
+
+
+                /* -----------------------------------------
+                   Si confirmée :
+                   remettre le stock
+                ----------------------------------------- */
+
+                if ($commande["statut"] === "Confirmée") {
+
+
+                    $stmtLignes = $pdo->prepare("
+                        SELECT
+                            id_produit,
+                            quantite
+                        FROM ligne_commande
+                        WHERE id_commande = ?
+                    ");
+
+                    $stmtLignes->execute([
+                        $idCommande
+                    ]);
+
+                    $lignes = $stmtLignes->fetchAll(
+                        PDO::FETCH_ASSOC
+                    );
+
+
+                    $stmtStock = $pdo->prepare("
+                        UPDATE produit
+                        SET stock = stock + ?
+                        WHERE id_produit = ?
+                    ");
+
+
+                    foreach ($lignes as $ligne) {
+
+                        $stmtStock->execute([
+                            (int) $ligne["quantite"],
+                            (int) $ligne["id_produit"]
+                        ]);
+                    }
+
+
+                    /* Supprimer la vente */
+
+                    $stmtVente = $pdo->prepare("
+                        DELETE FROM vente
+                        WHERE id_commande = ?
+                    ");
+
+                    $stmtVente->execute([
+                        $idCommande
+                    ]);
+                }
+
+
+                /* -----------------------------------------
+                   Supprimer les lignes
+                ----------------------------------------- */
+
+                $stmtLignes = $pdo->prepare("
+                    DELETE FROM ligne_commande
+                    WHERE id_commande = ?
+                ");
+
+                $stmtLignes->execute([
+                    $idCommande
+                ]);
+
+
+                /* -----------------------------------------
+                   Supprimer la commande
+                ----------------------------------------- */
+
+                $stmtDelete = $pdo->prepare("
+                    DELETE FROM commande
+                    WHERE id_commande = ?
+                ");
+
+                $stmtDelete->execute([
+                    $idCommande
+                ]);
+
+
+                $pdo->commit();
+
+
+            } catch (Throwable $e) {
+
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+
+
+                header(
+                    "Location: commandes.php?error="
+                    . urlencode(
+                        $e->getMessage()
+                    )
+                );
+
+                exit;
+            }
+        }
+
+
+        header(
+            "Location: commandes.php?success=suppression"
+        );
+
+        exit;
+    }
 }
+
+
+/* =========================================================
+   RÉCUPÉRER LES COMMANDES
+========================================================= */
+
 $sql = "
 
     SELECT
@@ -194,12 +606,10 @@ $sql = "
     FROM commande c
 
     INNER JOIN utilisateurs u
-
         ON c.id_utilisateur =
            u.id_utilisateur
 
     LEFT JOIN ligne_commande lc
-
         ON c.id_commande =
            lc.id_commande
 
@@ -218,29 +628,28 @@ $sql = "
 ";
 
 
-$stmt =
-    $pdo->query($sql);
+$stmt = $pdo->query($sql);
 
-$commandes =
-    $stmt->fetchAll(
-        PDO::FETCH_ASSOC
-    );
+$commandes = $stmt->fetchAll(
+    PDO::FETCH_ASSOC
+);
 
-$totalCommandes =
-    count($commandes);
+
+/* =========================================================
+   STATISTIQUES
+========================================================= */
+
+$totalCommandes = count($commandes);
 
 $enAttente = 0;
 
 $confirmees = 0;
 
-$preparation = 0;
-
-$livrees = 0;
-
 $chiffreAffaires = 0;
 
 
 foreach ($commandes as $commande) {
+
 
     if (
         $commande["statut"]
@@ -257,36 +666,23 @@ foreach ($commandes as $commande) {
     ) {
 
         $confirmees++;
-    }
-
-
-    if (
-        $commande["statut"]
-        === "En préparation"
-    ) {
-
-        $preparation++;
-    }
-
-
-    if (
-        $commande["statut"]
-        === "Livrée"
-    ) {
-
-        $livrees++;
 
         $chiffreAffaires +=
             (float) $commande["total"];
     }
 }
 
+
+/* =========================================================
+   PRODUITS D'UNE COMMANDE
+========================================================= */
+
 function getProduitsCommande(
     $pdo,
     $idCommande
 ) {
 
-    $sql = "
+    $stmt = $pdo->prepare("
 
         SELECT
 
@@ -301,7 +697,6 @@ function getProduitsCommande(
         FROM ligne_commande lc
 
         INNER JOIN produit p
-
             ON lc.id_produit =
                p.id_produit
 
@@ -311,11 +706,8 @@ function getProduitsCommande(
         ORDER BY
             p.nom_produit ASC
 
-    ";
+    ");
 
-
-    $stmt =
-        $pdo->prepare($sql);
 
     $stmt->execute([
         $idCommande
@@ -327,26 +719,20 @@ function getProduitsCommande(
     );
 }
 
+
+/* =========================================================
+   CLASSE STATUT
+========================================================= */
+
 function classeStatut($statut)
 {
 
-    switch ($statut) {
+    if ($statut === "Confirmée") {
 
-        case "Livrée":
-            return "statut-livree";
-
-        case "Confirmée":
-            return "statut-confirmee";
-
-        case "En préparation":
-            return "statut-preparation";
-
-        case "Annulée":
-            return "statut-annulee";
-
-        default:
-            return "statut-attente";
+        return "statut-confirmee";
     }
+
+    return "statut-attente";
 }
 
 ?>
@@ -359,45 +745,73 @@ function classeStatut($statut)
 
 <meta charset="UTF-8">
 
-<meta name="viewport"
-      content="width=device-width, initial-scale=1.0">
+<meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+>
 
-<title>Gestion des commandes</title>
-
-
-<link rel="stylesheet"
-      href="bootstrap-5.0.2-dist/css/bootstrap.min.css">
-
-
-<link rel="stylesheet"
-      href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+<title>
+    Gestion des commandes
+</title>
 
 
-<link rel="stylesheet"
-      href="commandes.css">
+<link
+    rel="stylesheet"
+    href="bootstrap-5.0.2-dist/css/bootstrap.min.css"
+>
+
+
+<link
+    rel="stylesheet"
+    href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"
+>
+
+
+<link
+    rel="stylesheet"
+    href="commandes.css"
+>
 
 </head>
 
 
 <body>
-<?php if (isset($_GET["success"]) && $_GET["success"] == "1"): ?>
+
+
+<!-- =====================================================
+     MESSAGE
+===================================================== -->
+
+<?php if (
+    isset($_GET["success"])
+): ?>
 
 <div class="alert alert-success alert-dismissible fade show m-3">
 
     <i class="bi bi-check-circle-fill"></i>
 
-    <strong>Commande enregistrée avec succès !</strong>
+    <?php if (
+        $_GET["success"] === "confirmation"
+    ): ?>
 
-    <?php if (isset($_GET["id_commande"])): ?>
+        <strong>
+            Commande confirmée avec succès !
+        </strong>
 
         <br>
 
-        Numéro de commande :
+        La vente a été enregistrée et le stock a été mis à jour.
+
+    <?php elseif (
+        $_GET["success"] === "suppression"
+    ): ?>
+
         <strong>
-            #<?= htmlspecialchars($_GET["id_commande"]) ?>
+            Commande supprimée avec succès !
         </strong>
 
     <?php endif; ?>
+
 
     <button
         type="button"
@@ -409,15 +823,51 @@ function classeStatut($statut)
 
 <?php endif; ?>
 
+
+<?php if (
+    isset($_GET["error"])
+): ?>
+
+<div class="alert alert-danger alert-dismissible fade show m-3">
+
+    <i class="bi bi-exclamation-triangle-fill"></i>
+
+    <?= htmlspecialchars(
+        $_GET["error"]
+    ) ?>
+
+
+    <button
+        type="button"
+        class="btn-close"
+        data-bs-dismiss="alert">
+    </button>
+
+</div>
+
+<?php endif; ?>
+
+
+<!-- =====================================================
+     DASHBOARD
+===================================================== -->
+
 <div class="dashboard">
 
+
+<!-- =====================================================
+     SIDEBAR
+===================================================== -->
+
 <aside class="sidebar">
+
 
     <div class="logo">
 
         <img
             src="img/WhatsApp Image 2026-07-13 at 12.34.47.jpeg"
-            alt="Logo">
+            alt="Logo"
+        >
 
         <h2>
             DORIANE AGROFEED
@@ -427,6 +877,7 @@ function classeStatut($statut)
 
 
     <ul class="menu">
+
 
         <li>
 
@@ -504,8 +955,6 @@ function classeStatut($statut)
             </a>
 
         </li>
-
-
         <li>
 
             <a href="index.php">
@@ -523,7 +972,8 @@ function classeStatut($statut)
 
             <a
                 href="connexion.php"
-                class="logout">
+                class="logout"
+            >
 
                 <i class="bi bi-box-arrow-right"></i>
 
@@ -533,434 +983,509 @@ function classeStatut($statut)
 
         </li>
 
+
     </ul>
 
 </aside>
 
 
 
+<!-- =====================================================
+     CONTENU
+===================================================== -->
+
 <main class="main-content">
 
-<div class="page-header">
 
-    <div>
+    <div class="page-header">
 
-        <span class="small-title">
-            ADMINISTRATION
+
+        <div>
+
+            <span class="small-title">
+                ADMINISTRATION
+            </span>
+
+
+            <h1>
+
+                <i class="bi bi-cart-check-fill"></i>
+
+                Gestion des commandes
+
+            </h1>
+
+
+            <p>
+                Gérez les commandes et confirmez les ventes.
+            </p>
+
+        </div>
+
+
+        <!-- BOUTON AJOUTER -->
+
+        <a
+            href="ajouter_commande.php"
+            class="btn btn-success btn-ajouter"
+        >
+
+            <i class="bi bi-plus-circle-fill"></i>
+
+            Ajouter une commande
+
+        </a>
+
+    </div>
+
+
+
+    <!-- =================================================
+         STATISTIQUES
+    ================================================= -->
+
+    <div class="stats-grid">
+
+
+        <!-- TOTAL -->
+
+        <div class="stat-card bg-success">
+
+            <div class="stat-icon">
+
+                <i class="bi bi-cart-fill"></i>
+
+            </div>
+
+
+            <div>
+
+                <span>
+                    Total commandes
+                </span>
+
+                <strong>
+                    <?= $totalCommandes ?>
+                </strong>
+
+            </div>
+
+        </div>
+
+
+        <!-- EN ATTENTE -->
+
+        <div class="stat-card bg-warning">
+
+            <div class="stat-icon">
+
+                <i class="bi bi-clock-fill"></i>
+
+            </div>
+
+
+            <div>
+
+                <span>
+                    En attente
+                </span>
+
+                <strong>
+                    <?= $enAttente ?>
+                </strong>
+
+            </div>
+
+        </div>
+
+
+        <!-- CONFIRMÉES -->
+
+        <div class="stat-card bg-primary">
+
+            <div class="stat-icon">
+
+                <i class="bi bi-check-circle-fill"></i>
+
+            </div>
+
+
+            <div>
+
+                <span>
+                    Confirmées
+                </span>
+
+                <strong>
+                    <?= $confirmees ?>
+                </strong>
+
+            </div>
+
+        </div>
+
+
+        <!-- CHIFFRE D'AFFAIRES -->
+
+        <div class="stat-card bg-danger">
+
+            <div class="stat-icon primary">
+
+                <i class="bi bi-cash-stack"></i>
+
+            </div>
+
+
+            <div>
+
+                <span>
+                    Chiffre d'affaires
+                </span>
+
+                <strong>
+
+                    <?= number_format(
+                        $chiffreAffaires,
+                        0,
+                        ",",
+                        " "
+                    ) ?>
+
+                    FCFA
+
+                </strong>
+
+            </div>
+
+        </div>
+
+
+    </div>
+
+
+
+    <!-- =================================================
+         LISTE DES COMMANDES
+    ================================================= -->
+    
+    <div class="orders-card">
+      
+
+        <div class="orders-header">
+                <div class="search-box mb-3">
+    <div class="input-group">
+        <span class="input-group-text">
+            <i class="bi bi-search"></i>
         </span>
 
-        <h1>
+        <input
+            type="text"
+            id="rechercheCommande"
+            class="form-control"
+            placeholder="Rechercher une commande, un client, un produit..."
+            autocomplete="off"
+        >
 
-            <i class="bi bi-cart-check-fill"></i>
+        <button
+            type="button"
+            class="btn btn-outline-secondary"
+            id="btnEffacerRecherche"
+            title="Effacer"
+        >
+            <i class="bi bi-x-lg"></i>
+          </button>
+         </div>
+       </div>
 
-            Gestion des commandes
+            <div>
 
-        </h1>
-
-        <p>
-            Gérez les commandes et suivez leur évolution.
-        </p>
-
-    </div>
-</div>
-
-
-<div class="stats-grid">
-
-
-    <div class="stat-card bg-success">
-
-        <div class="stat-icon blue">
-
-            <i class="bi bi-cart-fill"></i>
-
-        </div>
-
-        <div>
-
-            <span>
-                Total commandes
-            </span>
-
-            <strong>
-                <?= $totalCommandes ?>
-            </strong>
-
-        </div>
-
-    </div>
+                <h2>
+                    Liste des commandes
+                </h2>
 
 
+                <p>
 
-    <div class="stat-card bg-secondary">
+                    <?= $totalCommandes ?>
 
-        <div class="stat-icon orange">
+                    commande(s) enregistrée(s)
 
-            <i class="bi bi-clock-fill"></i>
+                </p>
+
+            </div>
 
         </div>
 
-        <div>
 
-            <span>
-                En attente
-            </span>
 
-            <strong>
-                <?= $enAttente ?>
-            </strong>
+        <?php if (
+            empty($commandes)
+        ): ?>
 
-        </div>
 
-    </div>
+            <div class="empty-state">
 
+                <i class="bi bi-cart-x"></i>
 
 
-    <div class="stat-card bg-danger">
+                <h3>
+                    Aucune commande
+                </h3>
 
-        <div class="stat-icon purple">
 
-            <i class="bi bi-box-seam-fill"></i>
+                <p>
+                    Aucune commande n'a encore été enregistrée.
+                </p>
 
-        </div>
 
-        <div>
+            </div>
 
-            <span>
-                En préparation
-            </span>
 
-            <strong>
-                <?= $preparation ?>
-            </strong>
+        <?php else: ?>
 
-        </div>
+      
+            <div class="table-responsive">
+             
 
-    </div>
+                <table class="table orders-table">
 
 
+                    <thead>
 
-    <div class="stat-card bg-primary">
+                        <tr>
 
-        <div class="stat-icon green">
+                            <th>
+                                N°
+                            </th>
 
-            <i class="bi bi-check-circle-fill"></i>
+                            <th>
+                                Client
+                            </th>
 
-        </div>
+                            <th>
+                                Produits
+                            </th>
 
-        <div>
+                            <th>
+                                Qté
+                            </th>
 
-            <span>
-                Livrées
-            </span>
+                            <th>
+                                Total
+                            </th>
 
-            <strong>
-                <?= $livrees ?>
-            </strong>
+                            <th>
+                                Date
+                            </th>
 
-        </div>
+                            <th>
+                                Statut
+                            </th>
 
-    </div>
+                            <th>
+                                Actions
+                            </th>
 
+                        </tr>
 
+                    </thead>
 
-    <div class="stat-card bg-warning">
 
-        <div class="stat-icon money">
+                    <tbody>
 
-            <i class="bi bi-cash-stack"></i>
 
-        </div>
+                    <?php foreach (
+                        $commandes
+                        as
+                        $commande
+                    ): ?>
 
-        <div>
 
-            <span>
-                Chiffre d'affaires
-            </span>
+                        <?php
 
-            <strong>
-
-                <?= number_format(
-                    $chiffreAffaires,
-                    0,
-                    ",",
-                    " "
-                ) ?>
-
-                FCFA
-
-            </strong>
-
-        </div>
-
-    </div>
-
-</div>
-
-
-<div class="orders-card">
-
-
-    <div class="orders-header">
-
-        <div>
-
-            <h2>
-                Liste des commandes
-            </h2>
-
-            <p>
-                <?= $totalCommandes ?>
-                commande(s) enregistrée(s)
-            </p>
-
-        </div>
-
-    </div>
-
-
-
-    <?php if (empty($commandes)): ?>
-
-        <div class="empty-state">
-
-            <i class="bi bi-cart-x"></i>
-
-            <h3>
-                Aucune commande
-            </h3>
-
-            <p>
-                Aucune commande n'a encore été enregistrée.
-            </p>
-
-            <a
-                href="ajouter_commande.php"
-                class="btn btn-success">
-
-                <i class="bi bi-plus-circle"></i>
-
-                Ajouter une commande
-
-            </a>
-
-        </div>
-
-
-    <?php else: ?>
-
-
-        <div class="table-responsive">
-
-            <table class="table orders-table">
-
-                <thead>
-
-                    <tr>
-
-                        <th>
-                            N°
-                        </th>
-
-                        <th>
-                            Client
-                        </th>
-
-                        <th>
-                            Produits
-                        </th>
-
-                        <th>
-                            Qté
-                        </th>
-
-                        <th>
-                            Total
-                        </th>
-
-                        <th>
-                            Date
-                        </th>
-
-                        <th>
-                            Statut
-                        </th>
-
-                        <th>
-                            Actions
-                        </th>
-
-                    </tr>
-
-                </thead>
-
-
-                <tbody>
-
-
-                <?php foreach (
-                    $commandes
-                    as
-                    $commande
-                ): ?>
-
-
-                    <?php
-
-                    $produitsCommande =
-                        getProduitsCommande(
-                            $pdo,
-                            $commande["id_commande"]
-                        );
-
-                    ?>
-
-
-                    <tr>
-                        <td>
-
-                            <span class="order-number">
-
-                                #
-                                <?= $commande[
+                        $produitsCommande =
+                            getProduitsCommande(
+                                $pdo,
+                                $commande[
                                     "id_commande"
-                                ] ?>
+                                ]
+                            );
 
-                            </span>
-
-                        </td>
-
-                        <td>
-
-                            <div class="client">
-
-                                <div class="client-avatar">
-
-                                    <i class="bi bi-person-fill"></i>
-
-                                </div>
-
-                                <div>
-
-                                    <strong>
-
-                                        <?= htmlspecialchars(
-                                            $commande["nom"]
-                                            . " "
-                                            . $commande["prenom"]
-                                        ) ?>
-
-                                    </strong>
+                        ?>
 
 
-                                    <?php if (
-                                        !empty(
-                                            $commande[
-                                                "telephone"
-                                            ]
-                                        )
-                                    ): ?>
+                        <tr>
 
-                                        <small>
 
-                                            <i class="bi bi-telephone"></i>
+                            <!-- NUMÉRO -->
 
-                                            <?= htmlspecialchars(
-                                                $commande[
-                                                    "telephone"
-                                                ]
-                                            ) ?>
+                            <td>
 
-                                        </small>
+                                <span class="order-number">
 
-                                    <?php endif; ?>
+                                    #
 
-                                </div>
+                                    <?= (int)
+                                        $commande[
+                                            "id_commande"
+                                        ] ?>
 
-                            </div>
+                                </span>
 
-                        </td>
+                            </td>
 
-                        <td>
 
-                            <div class="products-list">
+                            <!-- CLIENT -->
 
-                                <?php foreach (
-                                    $produitsCommande
-                                    as
-                                    $produit
-                                ): ?>
+                            <td>
 
-                                    <div class="product-line">
+                                <div class="client">
 
-                                        <span>
 
-                                            <?= htmlspecialchars(
-                                                $produit[
-                                                    "nom_produit"
-                                                ]
-                                            ) ?>
+                                    <div class="client-avatar">
 
-                                        </span>
-
-                                        
+                                        <i class="bi bi-person-fill"></i>
 
                                     </div>
 
-                                <?php endforeach; ?>
 
-                            </div>
+                                    <div>
 
-                        </td>
+                                        <strong>
 
-                        <td>
+                                            <?= htmlspecialchars(
+                                                $commande["nom"]
+                                                . " "
+                                                . $commande["prenom"]
+                                            ) ?>
 
-                            <span class="quantity-badge">
+                                        </strong>
 
-                                <?= $commande[
-                                    "nombre_articles"
-                                ] ?>
 
-                            </span>
+                                        <?php if (
+                                            !empty(
+                                                $commande[
+                                                    "telephone"
+                                                ]
+                                            )
+                                        ): ?>
 
-                        </td>
+                                            <small>
 
-                        <td>
+                                                <i class="bi bi-telephone"></i>
 
-                            <strong class="order-total">
+                                                <?= htmlspecialchars(
+                                                    $commande[
+                                                        "telephone"
+                                                    ]
+                                                ) ?>
 
-                                <?= number_format(
-                                    $commande["total"],
-                                    0,
-                                    ",",
-                                    " "
-                                ) ?>
+                                            </small>
 
-                                FCFA
+                                        <?php endif; ?>
 
-                            </strong>
 
-                        </td>
+                                    </div>
 
-                        <td>
+                                </div>
 
-                            <div class="date">
+                            </td>
 
-                                <i class="bi bi-calendar3"></i>
 
-                                <?= date(
-                                    "d/m/Y",
-                                    strtotime(
+                            <!-- PRODUITS -->
+
+                            <td>
+
+                                <div class="products-list">
+
+
+                                    <?php foreach (
+                                        $produitsCommande
+                                        as
+                                        $produit
+                                    ): ?>
+
+
+                                        <div class="product-line">
+
+                                            <span>
+
+                                                <?= htmlspecialchars(
+                                                    $produit[
+                                                        "nom_produit"
+                                                    ]
+                                                ) ?>
+
+                                            </span>
+
+
+                                            <small>
+
+                                                x
+                                                <?= (int)
+                                                    $produit[
+                                                        "quantite"
+                                                    ] ?>
+
+                                            </small>
+
+                                        </div>
+
+
+                                    <?php endforeach; ?>
+
+
+                                </div>
+
+                            </td>
+
+
+                            <!-- QUANTITÉ -->
+
+                            <td>
+
+                                <span class="quantity-badge">
+
+                                    <?= (int)
                                         $commande[
-                                            "date_commande"
-                                        ]
-                                    )
-                                ) ?>
+                                            "nombre_articles"
+                                        ] ?>
 
-                                <small>
+                                </span>
+
+                            </td>
+
+
+                            <!-- TOTAL -->
+
+                            <td>
+
+                                <strong class="order-total">
+
+                                    <?= number_format(
+                                        $commande["total"],
+                                        0,
+                                        ",",
+                                        " "
+                                    ) ?>
+
+                                    FCFA
+
+                                </strong>
+
+                            </td>
+
+
+                            <!-- DATE -->
+
+                            <td>
+
+                                <div class="date">
+
+                                    <i class="bi bi-calendar3"></i>
 
                                     <?= date(
-                                        "H:i",
+                                        "d/m/Y",
                                         strtotime(
                                             $commande[
                                                 "date_commande"
@@ -968,150 +1493,143 @@ function classeStatut($statut)
                                         )
                                     ) ?>
 
-                                </small>
 
-                            </div>
+                                    <small>
 
-                        </td>
+                                        <?= date(
+                                            "H:i",
+                                            strtotime(
+                                                $commande[
+                                                    "date_commande"
+                                                ]
+                                            )
+                                        ) ?>
 
+                                    </small>
 
+                                </div>
 
-                        <td>
+                            </td>
 
-                            <div class="dropdown">
 
-                                <button
-                                    class="status-button <?= classeStatut($commande["statut"]) ?>"
-                                    data-bs-toggle="dropdown">
+                            <!-- STATUT -->
 
-                                    <?= htmlspecialchars(
-                                        $commande["statut"]
-                                    ) ?>
+                            <td>
 
-                                    <i class="bi bi-chevron-down"></i>
 
-                                </button>
+                                <div class="dropdown">
 
 
-                                <ul class="dropdown-menu">
+                                    <button
+                                        class="status-button <?= classeStatut($commande["statut"]) ?>"
+                                        data-bs-toggle="dropdown"
+                                    >
 
-                                    <li>
+                                        <?= htmlspecialchars(
+                                            $commande[
+                                                "statut"
+                                            ]
+                                        ) ?>
 
-                                        <a
-                                            class="dropdown-item"
-                                            href="commandes.php?action=statut&id=<?= $commande["id_commande"] ?>&valeur=En%20attente">
 
-                                            <i class="bi bi-clock"></i>
+                                        <i class="bi bi-chevron-down"></i>
 
-                                            En attente
+                                    </button>
 
-                                        </a>
 
-                                    </li>
+                                    <ul class="dropdown-menu">
 
 
-                                    <li>
+                                        <!-- EN ATTENTE -->
 
-                                        <a
-                                            class="dropdown-item"
-                                            href="commandes.php?action=statut&id=<?= $commande["id_commande"] ?>&valeur=Confirm%C3%A9e">
+                                        <li>
 
-                                            <i class="bi bi-check"></i>
+                                            <a
+                                                class="dropdown-item"
+                                                href="commandes.php?action=statut&id=<?= (int)$commande["id_commande"] ?>&valeur=En%20attente"
+                                            >
 
-                                            Confirmée
+                                                <i class="bi bi-clock"></i>
 
-                                        </a>
+                                                En attente
 
-                                    </li>
+                                            </a>
 
+                                        </li>
 
-                                    <li>
 
-                                        <a
-                                            class="dropdown-item"
-                                            href="commandes.php?action=statut&id=<?= $commande["id_commande"] ?>&valeur=En%20pr%C3%A9paration">
+                                        <!-- CONFIRMÉE -->
 
-                                            <i class="bi bi-box-seam"></i>
+                                        <li>
 
-                                            En préparation
+                                            <a
+                                                class="dropdown-item"
+                                                href="commandes.php?action=statut&id=<?= (int)$commande["id_commande"] ?>&valeur=Confirm%C3%A9e"
+                                            >
 
-                                        </a>
+                                                <i class="bi bi-check-circle-fill text-success"></i>
 
-                                    </li>
+                                                Confirmer
 
+                                            </a>
 
-                                    <li>
+                                        </li>
 
-                                        <a
-                                            class="dropdown-item"
-                                            href="commandes.php?action=statut&id=<?= $commande["id_commande"] ?>&valeur=Livr%C3%A9e">
 
-                                            <i class="bi bi-check-circle"></i>
+                                    </ul>
 
-                                            Livrée
+                                </div>
 
-                                        </a>
 
-                                    </li>
+                            </td>
 
 
-                                    <li>
+                            <!-- ACTIONS -->
 
-                                        <a
-                                            class="dropdown-item text-danger"
-                                            href="commandes.php?action=statut&id=<?= $commande["id_commande"] ?>&valeur=Annul%C3%A9e">
+                            <td>
 
-                                            <i class="bi bi-x-circle"></i>
+                                <div class="actions-buttons">
 
-                                            Annulée
 
-                                        </a>
+                                    <a
+                                        href="commandes.php?action=supprimer&id=<?= (int)$commande["id_commande"] ?>"
+                                        class="action-btn delete"
+                                        title="Supprimer"
+                                        onclick="return confirmerSuppression();"
+                                    >
 
-                                    </li>
+                                        <i class="bi bi-trash-fill"></i>
 
-                                </ul>
+                                    </a>
 
-                            </div>
 
-                        </td>
+                                </div>
 
+                            </td>
 
-                        
 
-                        <td>
+                        </tr>
 
-                            <div class="actions-buttons">
-                                <a
-                                    href="commandes.php?action=supprimer&id=<?= $commande["id_commande"] ?>"
-                                    class="action-btn delete"
-                                    title="Supprimer"
-                                    onclick="return confirmerSuppression();">
 
-                                    <i class="bi bi-trash-fill"></i>
+                    <?php endforeach; ?>
 
-                                </a>
 
-                            </div>
+                    </tbody>
 
-                        </td>
+                </table>
 
-                    </tr>
 
+            </div>
 
-                <?php endforeach; ?>
 
+        <?php endif; ?>
 
-                </tbody>
 
-            </table>
+    </div>
 
-        </div>
-
-    <?php endif; ?>
-
-</div>
 
 </main>
+
 
 </div>
 
@@ -1124,15 +1642,56 @@ function classeStatut($statut)
 function confirmerSuppression() {
 
     return confirm(
-        "Voulez-vous vraiment supprimer cette commande ?\n\nLe stock des produits sera remis automatiquement."
+        "Voulez-vous vraiment supprimer cette commande ?\n\n"
+        + "Si la commande est confirmée, "
+        + "le stock sera automatiquement restauré."
     );
 
 }
+const rechercheCommande = document.getElementById("rechercheCommande");
+const btnEffacerRecherche = document.getElementById("btnEffacerRecherche");
 
+rechercheCommande.addEventListener("input", function () {
+
+    const recherche = this.value.toLowerCase().trim();
+
+    const lignes = document.querySelectorAll(
+        ".orders-table tbody tr"
+    );
+
+    lignes.forEach(function (ligne) {
+
+        const texte = ligne.textContent.toLowerCase();
+
+        if (texte.includes(recherche)) {
+            ligne.style.display = "";
+        } else {
+            ligne.style.display = "none";
+        }
+
+    });
+
+});
+
+
+btnEffacerRecherche.addEventListener("click", function () {
+
+    rechercheCommande.value = "";
+
+    const lignes = document.querySelectorAll(
+        ".orders-table tbody tr"
+    );
+
+    lignes.forEach(function (ligne) {
+        ligne.style.display = "";
+    });
+
+    rechercheCommande.focus();
+
+});
 </script>
 
 
 </body>
 
 </html>
-

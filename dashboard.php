@@ -427,21 +427,6 @@ $produitsPopulaires = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         <li>
 
-            <a href="gestion_site.php">
-
-                <i class="bi bi-gear-fill"></i>
-
-                <span>
-                    Gestion du site
-                </span>
-
-            </a>
-
-        </li>
-
-
-        <li>
-
             <a href="clients.php">
 
                 <i class="bi bi-people-fill"></i>
@@ -502,7 +487,7 @@ $produitsPopulaires = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         <li>
 
-            <a href="../index.php">
+            <a href="index.php">
 
                 <i class="bi bi-house-fill"></i>
 

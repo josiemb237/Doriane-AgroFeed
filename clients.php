@@ -114,20 +114,6 @@ $nouveauxClients = $stmtNouveaux->fetchColumn();
 
         </li>
 
-
-        <li>
-
-            <a href="gestion_site.php">
-
-                <i class="bi bi-gear-fill"></i>
-
-                Gestion du site
-
-            </a>
-
-        </li>
-
-
         <li class="active">
 
             <a href="clients.php">

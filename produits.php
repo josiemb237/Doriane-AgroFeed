@@ -92,14 +92,6 @@ foreach ($produits as $produit) {
                 Tableau de bord
             </a>
         </li>
-
-        <li>
-            <a href="#">
-                <i class="bi bi-gear-fill"></i>
-                Gestion du site
-            </a>
-        </li>
-
         <li>
             <a href="clients.php">
                 <i class="bi bi-people-fill"></i>

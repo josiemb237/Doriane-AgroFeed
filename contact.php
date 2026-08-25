@@ -27,16 +27,16 @@
             <ul class="navbar-nav mx-auto text-uppercase">
 
                 <li class="nav-item">
-                    <a class="nav-link active px-3 " href="index.html">Accueil</a>
+                    <a class="nav-link active px-3 " href="index.php">Accueil</a>
                 </li>
 
                 <li class="nav-item">
-                    <a class="nav-link active px-3" href="a propos.html">À propos</a>
+                    <a class="nav-link active px-3" href="a propos.php">À propos</a>
                 </li>
 
                 <li class="nav-item dropdown">
 
-                    <a class="nav-link active px-3" href="services.html">
+                    <a class="nav-link active px-3" href="services.php">
 
                         Services
                     </a>
@@ -53,17 +53,31 @@
 
 
                 <li class="nav-item">
-                    <a class="nav-link active px-3" href="galerie.html">Galerie</a>
+                    <a class="nav-link active px-3" href="galerie.php">Galerie</a>
                 </li>
 
                 <li class="nav-item">
-                    <a class="nav-link active px-3" href="contact.html">Contact</a>
+                    <a class="nav-link active px-3" href="contact.php">Contact</a>
                 </li>
-                <li class="nav-item">
-                        <a href="comande.html" class="nav-link text-light p-1">Comande</a>
-                    </li>
-
+                
             </ul>
+             <?php if (isset($_SESSION["connecte"]) && $_SESSION["connecte"] === true): ?>
+
+                <a href="deconexion.php" class="nav-deconnexion">
+                    Déconnexion
+                </a>
+
+            <?php else: ?>
+
+                <a href="connexion.php" class="nav-connexion">
+                    Connexion
+                </a>
+
+                <a href="inscription_client.php" class="nav-inscription">
+                    Inscription
+                </a>
+
+            <?php endif; ?>
 
             
 
@@ -200,27 +214,25 @@
                 <ul class="nav flex-column">
 
                     <li class="nav-item">
-                        <a href="index.html" class="nav-link text-light p-1">Accueil</a>
+                        <a href="index.php" class="nav-link text-light p-1">Accueil</a>
                     </li>
 
                     <li class="nav-item">
-                        <a href="a propos.html" class="nav-link text-light p-1">À propos</a>
+                        <a href="a propos.php" class="nav-link text-light p-1">À propos</a>
                     </li>
 
                     <li class="nav-item">
-                        <a href="services.html" class="nav-link text-light p-1">Nos services</a>
+                        <a href="services.php" class="nav-link text-light p-1">Nos services</a>
                     </li>
 
                     <li class="nav-item">
-                        <a href="galerie.html" class="nav-link text-light p-1">Galerie</a>
+                        <a href="galerie.php" class="nav-link text-light p-1">Galerie</a>
                     </li>
 
                     <li class="nav-item">
-                        <a href="contact.html" class="nav-link text-light p-1">Contact</a>
+                        <a href="contact.php" class="nav-link text-light p-1">Contact</a>
                     </li>
-                    <li class="nav-item">
-                        <a href="comande.html" class="nav-link text-light p-1">Comande</a>
-                    </li>
+                    
 
                 </ul>
 

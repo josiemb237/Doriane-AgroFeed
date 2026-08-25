@@ -28,16 +28,16 @@
             <ul class="navbar-nav mx-auto text-uppercase">
 
                 <li class="nav-item">
-                    <a class="nav-link active px-3 " href="index.html">Accueil</a>
+                    <a class="nav-link active px-3 " href="index.php">Accueil</a>
                 </li>
 
                 <li class="nav-item">
-                    <a class="nav-link active px-3" href="a propos.html">À propos</a>
+                    <a class="nav-link active px-3" href="a propos.php">À propos</a>
                 </li>
 
                 <li class="nav-item dropdown">
 
-                    <a class="nav-link active px-3" href="services.html">
+                    <a class="nav-link active px-3" href="services.php">
 
                         Services
                     </a>
@@ -54,18 +54,33 @@
 
 
                 <li class="nav-item">
-                    <a class="nav-link active px-3" href="galerie.html">Galerie</a>
+                    <a class="nav-link active px-3" href="galerie.php">Galerie</a>
                 </li>
 
                 <li class="nav-item">
-                    <a class="nav-link active px-3" href="contact.html">Contact</a>
+                    <a class="nav-link active px-3" href="contact.php">Contact</a>
                 </li>
-                 <li class="nav-item">
-                    <a class="nav-link active px-3" href="comande.html">Comande</a>
-                </li>
-
+                
             </ul>
+             
 
+            <?php if (isset($_SESSION["connecte"]) && $_SESSION["connecte"] === true): ?>
+
+                <a href="deconexion.php" class="nav-deconnexion">
+                    Déconnexion
+                </a>
+
+            <?php else: ?>
+
+                <a href="connexion.php" class="nav-connexion">
+                    Connexion
+                </a>
+
+                <a href="inscription_client.php" class="nav-inscription">
+                    Inscription
+                </a>
+
+            <?php endif; ?>
             
         </div>
 
@@ -138,20 +153,11 @@
 
              <a href="https://wa.me/237676870980" target="_blank" class="whatsapp-btn">
            
-             <img src="https://upload.wikimedia.org/wikipedia/commons/6/6b/WhatsApp.svg" alt="WhatsApp" width="60px">
-        </a>
-        <a href="https://www.facebook.com/" target="_blank" class="facebook-btn">
-           <img src="https://upload.wikimedia.org/wikipedia/commons/6/6b/facebook.svg" alt="facebook" width="60px">
-        </a>
+             
         </div>
 
     </div>
-    <div class="footer-bottom">
-  <p>
-            © 2026 Doriane Agro Feed | Tous droits réservés.
-        </p>
-
-    </div>
+   
 <footer class="bg-dark text-light pt-5 pb-3">
 
     <div class="container">

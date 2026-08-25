@@ -173,9 +173,7 @@ CREATE TABLE commande (
 
     statut ENUM(
         'En attente',
-        'Validée',
-        'Livrée',
-        'Annulée'
+        'Confirmée'
     ) DEFAULT 'En attente',
 
     date_commande TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
