@@ -502,7 +502,7 @@ $produitsPopulaires = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         <li class="logout">
 
-            <a href="admin.php">
+            <a href="connexion.php">
 
                 <i class="bi bi-box-arrow-right"></i>
 
@@ -754,32 +754,6 @@ $produitsPopulaires = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         </div>
 
-
-        <div class="small-card">
-
-            <div class="small-icon green-icon">
-
-                <i class="bi bi-check-circle-fill"></i>
-
-            </div>
-
-            <div>
-
-                <span>
-                    Commandes livrées
-                </span>
-
-                <strong>
-                    <?= $commandesLivrees ?>
-                </strong>
-
-                <small>
-                    Commandes terminées
-                </small>
-
-            </div>
-
-        </div>
 
 
         <div class="small-card">

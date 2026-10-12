@@ -21,7 +21,7 @@ function envoyerOTP($email, $otp, $objet)
 
         // MOT DE PASSE D'APPLICATION GOOGLE
         // Remplace par le nouveau
-        $mail->Password = "bvws eflo unxp yfen";
+        $mail->Password = "nren zrwm welu vogl";
 
         $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
         $mail->Port = 587;

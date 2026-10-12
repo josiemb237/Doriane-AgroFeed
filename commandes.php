@@ -894,19 +894,6 @@ function classeStatut($statut)
 
         <li>
 
-            <a href="gestion_site.php">
-
-                <i class="bi bi-gear-fill"></i>
-
-                Gestion du site
-
-            </a>
-
-        </li>
-
-
-        <li>
-
             <a href="clients.php">
 
                 <i class="bi bi-people-fill"></i>

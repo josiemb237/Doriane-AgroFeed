@@ -8,21 +8,6 @@ require_once "connexions.php";
 
 $erreur = "";
 $succes = "";
-$idCommandeSucces = null;
-
-
-/* =========================================================
-   MESSAGE APRÈS ENREGISTREMENT
-========================================================= */
-
-if (isset($_GET["success"]) && $_GET["success"] == "1") {
-
-    $succes = "Commande enregistrée avec succès !";
-
-    if (isset($_GET["id_commande"])) {
-        $idCommandeSucces = intval($_GET["id_commande"]);
-    }
-}
 
 
 /* =========================================================
@@ -33,7 +18,7 @@ $produitSelectionne = null;
 
 if (isset($_GET["produit"])) {
 
-    $idProduit = intval($_GET["produit"]);
+    $idProduit = (int) $_GET["produit"];
 
     if ($idProduit > 0) {
 
@@ -47,6 +32,7 @@ if (isset($_GET["produit"])) {
             FROM produit
             WHERE id_produit = ?
             AND stock > 0
+            LIMIT 1
         ");
 
         $stmt->execute([$idProduit]);
@@ -78,19 +64,25 @@ $produits =
 
 
 /* =========================================================
-   ENREGISTREMENT DE LA COMMANDE
+   ENREGISTRER LA COMMANDE
 ========================================================= */
 
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
-    $nom =
-        trim($_POST["nom"] ?? "");
+    /* -----------------------------------------------------
+       INFORMATIONS CLIENT
+    ----------------------------------------------------- */
 
-    $prenom =
-        trim($_POST["prenom"] ?? "");
+    $nom = trim($_POST["nom"] ?? "");
 
-    $telephone =
-        trim($_POST["telephone"] ?? "");
+    $prenom = trim($_POST["prenom"] ?? "");
+
+    $telephone = trim($_POST["telephone"] ?? "");
+
+
+    /* -----------------------------------------------------
+       PRODUITS
+    ----------------------------------------------------- */
 
     $produitsCommande =
         $_POST["produit"] ?? [];
@@ -100,7 +92,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
 
     /* =====================================================
-       VÉRIFICATION DES INFORMATIONS
+       VÉRIFICATION CLIENT
     ===================================================== */
 
     if (
@@ -110,7 +102,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     ) {
 
         $erreur =
-            "Veuillez remplir tous les champs du client.";
+            "Veuillez remplir le nom, le prénom et le téléphone du client.";
 
     } else {
 
@@ -121,73 +113,86 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
         $lignesCommande = [];
 
-        foreach (
-            $produitsCommande
-            as $index => $idProduit
-        ) {
 
-            $idProduit =
-                intval($idProduit);
+        if (is_array($produitsCommande)) {
 
-            $quantite =
-                intval(
-                    $quantites[$index] ?? 0
-                );
-
-
-            if (
-                $idProduit > 0 &&
-                $quantite > 0
+            foreach (
+                $produitsCommande as $index => $idProduit
             ) {
 
+                $idProduit =
+                    (int) $idProduit;
+
+                $quantite =
+                    (int) ($quantites[$index] ?? 0);
+
+
                 if (
-                    isset(
-                        $lignesCommande[$idProduit]
-                    )
+                    $idProduit > 0 &&
+                    $quantite > 0
                 ) {
 
-                    $lignesCommande[$idProduit]
-                        += $quantite;
+                    /*
+                     * Si le même produit est sélectionné
+                     * plusieurs fois, on additionne les quantités.
+                     */
 
-                } else {
+                    if (
+                        isset(
+                            $lignesCommande[$idProduit]
+                        )
+                    ) {
 
-                    $lignesCommande[$idProduit]
-                        = $quantite;
+                        $lignesCommande[$idProduit]
+                            += $quantite;
+
+                    } else {
+
+                        $lignesCommande[$idProduit]
+                            = $quantite;
+                    }
                 }
             }
         }
 
 
         /* =================================================
-           AUCUN PRODUIT
+           VÉRIFIER LES PRODUITS
         ================================================= */
 
         if (empty($lignesCommande)) {
 
             $erreur =
-                "Veuillez sélectionner au moins un produit avec une quantité valide.";
+                "Veuillez sélectionner au moins un produit et indiquer une quantité.";
 
         } else {
 
 
             try {
 
-                /* =============================================
+                /* =================================================
                    DÉBUT TRANSACTION
-                ============================================= */
+                ================================================= */
 
                 $pdo->beginTransaction();
 
 
-                /* =============================================
+                /* =================================================
                    RECHERCHER LE CLIENT
-                ============================================= */
+                ================================================= */
 
                 $stmtClient = $pdo->prepare("
-                    SELECT id_utilisateur
+                    SELECT
+                        id_utilisateur,
+                        nom,
+                        prenom,
+                        telephone,
+                        role
                     FROM utilisateurs
                     WHERE telephone = ?
+                    AND role = 'client'
                     LIMIT 1
+                    FOR UPDATE
                 ");
 
                 $stmtClient->execute([
@@ -200,56 +205,73 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                     );
 
 
-                /* =============================================
+                /* =================================================
                    CLIENT EXISTANT
-                ============================================= */
+                ================================================= */
 
                 if ($client) {
 
                     $idUtilisateur =
-                        $client["id_utilisateur"];
+                        (int) $client["id_utilisateur"];
 
 
-                    /*
-                     * Mise à jour du client
-                     */
+                    /* ---------------------------------------------
+                       Mettre à jour les informations
+                    --------------------------------------------- */
 
-                    $stmtUpdate = $pdo->prepare("
+                    $stmtUpdateClient = $pdo->prepare("
                         UPDATE utilisateurs
                         SET
                             nom = ?,
-                            prenom = ?,
-                            telephone = ?
+                            prenom = ?
                         WHERE id_utilisateur = ?
                     ");
 
-                    $stmtUpdate->execute([
+                    $stmtUpdateClient->execute([
                         $nom,
                         $prenom,
-                        $telephone,
                         $idUtilisateur
                     ]);
-
                 }
 
 
-                /* =============================================
+                /* =================================================
                    NOUVEAU CLIENT
-                ============================================= */
+                ================================================= */
 
                 else {
 
-                    $stmtInsert = $pdo->prepare("
+                    /*
+                     * On crée uniquement :
+                     * nom
+                     * prénom
+                     * téléphone
+                     * rôle
+                     *
+                     * L'e-mail n'est PAS inséré ici.
+                     *
+                     * Cela évite les problèmes de Duplicate entry
+                     * sur la colonne email.
+                     */
+
+                    $stmtInsertClient = $pdo->prepare("
                         INSERT INTO utilisateurs
                         (
                             nom,
                             prenom,
-                            telephone
+                            telephone,
+                            role
                         )
-                        VALUES (?, ?, ?)
+                        VALUES
+                        (
+                            ?,
+                            ?,
+                            ?,
+                            'client'
+                        )
                     ");
 
-                    $stmtInsert->execute([
+                    $stmtInsertClient->execute([
                         $nom,
                         $prenom,
                         $telephone
@@ -257,13 +279,25 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
 
                     $idUtilisateur =
-                        $pdo->lastInsertId();
+                        (int) $pdo->lastInsertId();
                 }
 
 
-                /* =============================================
+                /* =================================================
+                   VÉRIFICATION ID UTILISATEUR
+                ================================================= */
+
+                if ($idUtilisateur <= 0) {
+
+                    throw new Exception(
+                        "Impossible de récupérer l'identifiant du client."
+                    );
+                }
+
+
+                /* =================================================
                    CRÉER LA COMMANDE
-                ============================================= */
+                ================================================= */
 
                 $stmtCommande = $pdo->prepare("
                     INSERT INTO commande
@@ -271,22 +305,37 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                         id_utilisateur,
                         statut
                     )
-                    VALUES (?, ?)
+                    VALUES
+                    (
+                        ?,
+                        'En attente'
+                    )
                 ");
 
                 $stmtCommande->execute([
-                    $idUtilisateur,
-                    "En attente"
+                    $idUtilisateur
                 ]);
 
 
+                /* =================================================
+                   RÉCUPÉRER ID COMMANDE
+                ================================================= */
+
                 $idCommande =
-                    $pdo->lastInsertId();
+                    (int) $pdo->lastInsertId();
 
 
-                /* =============================================
-                   REQUÊTE PRODUIT
-                ============================================= */
+                if ($idCommande <= 0) {
+
+                    throw new Exception(
+                        "Impossible de créer la commande."
+                    );
+                }
+
+
+                /* =================================================
+                   PRÉPARER REQUÊTE PRODUIT
+                ================================================= */
 
                 $stmtProduit = $pdo->prepare("
                     SELECT
@@ -300,9 +349,9 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                 ");
 
 
-                /* =============================================
-                   REQUÊTE LIGNE COMMANDE
-                ============================================= */
+                /* =================================================
+                   PRÉPARER INSERTION LIGNE COMMANDE
+                ================================================= */
 
                 $stmtLigne = $pdo->prepare("
                     INSERT INTO ligne_commande
@@ -313,13 +362,20 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                         prix_unitaire,
                         sous_total
                     )
-                    VALUES (?, ?, ?, ?, ?)
+                    VALUES
+                    (
+                        ?,
+                        ?,
+                        ?,
+                        ?,
+                        ?
+                    )
                 ");
 
 
-                /* =============================================
-                   REQUÊTE STOCK
-                ============================================= */
+                /* =================================================
+                   PRÉPARER MISE À JOUR STOCK
+                ================================================= */
 
                 $stmtStock = $pdo->prepare("
                     UPDATE produit
@@ -328,9 +384,9 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                 ");
 
 
-                /* =============================================
-                   ENREGISTRER LES PRODUITS
-                ============================================= */
+                /* =================================================
+                   ENREGISTRER CHAQUE PRODUIT
+                ================================================= */
 
                 foreach (
                     $lignesCommande
@@ -338,12 +394,13 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                 ) {
 
 
-                    /* Récupérer le produit */
+                    /* ---------------------------------------------
+                       Récupérer le produit
+                    --------------------------------------------- */
 
                     $stmtProduit->execute([
                         $idProduit
                     ]);
-
 
                     $produit =
                         $stmtProduit->fetch(
@@ -351,7 +408,9 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                         );
 
 
-                    /* Produit inexistant */
+                    /* ---------------------------------------------
+                       Produit inexistant
+                    --------------------------------------------- */
 
                     if (!$produit) {
 
@@ -361,12 +420,26 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                     }
 
 
-                    /* =========================================
-                       VÉRIFIER LE STOCK
-                    ========================================= */
+                    /* ---------------------------------------------
+                       Vérifier la quantité
+                    --------------------------------------------- */
+
+                    if ($quantite <= 0) {
+
+                        throw new Exception(
+                            "La quantité du produit "
+                            . $produit["nom_produit"]
+                            . " est invalide."
+                        );
+                    }
+
+
+                    /* ---------------------------------------------
+                       Vérifier le stock
+                    --------------------------------------------- */
 
                     $stock =
-                        intval($produit["stock"]);
+                        (int) $produit["stock"];
 
 
                     if ($quantite > $stock) {
@@ -380,21 +453,25 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                     }
 
 
-                    /* =========================================
-                       CALCUL SOUS-TOTAL
-                    ========================================= */
+                    /* ---------------------------------------------
+                       Prix
+                    --------------------------------------------- */
 
                     $prix =
-                        floatval($produit["prix"]);
+                        (float) $produit["prix"];
 
+
+                    /* ---------------------------------------------
+                       Sous-total
+                    --------------------------------------------- */
 
                     $sousTotal =
                         $prix * $quantite;
 
 
-                    /* =========================================
-                       ENREGISTRER LIGNE
-                    ========================================= */
+                    /* ---------------------------------------------
+                       Enregistrer ligne commande
+                    --------------------------------------------- */
 
                     $stmtLigne->execute([
                         $idCommande,
@@ -405,30 +482,45 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                     ]);
 
 
-                    /* =========================================
-                       DIMINUER LE STOCK
-                    ========================================= */
+                    /* ---------------------------------------------
+                       Diminuer le stock
+                    --------------------------------------------- */
 
                     $stmtStock->execute([
                         $quantite,
                         $idProduit
                     ]);
+
+
+                    /* ---------------------------------------------
+                       Vérification mise à jour stock
+                    --------------------------------------------- */
+
+                    if (
+                        $stmtStock->rowCount() <= 0
+                    ) {
+
+                        throw new Exception(
+                            "Impossible de mettre à jour le stock du produit : "
+                            . $produit["nom_produit"]
+                        );
+                    }
                 }
 
 
-                /* =============================================
-                   VALIDER
-                ============================================= */
+                /* =================================================
+                   VALIDER LA TRANSACTION
+                ================================================= */
 
                 $pdo->commit();
 
 
-                /* =============================================
-                   REDIRECTION SUR LA MÊME PAGE
-                ============================================= */
+                /* =================================================
+                   REDIRECTION VERS COMMANDES.PHP
+                ================================================= */
 
                 header(
-                    "Location: ajouter_commande.php?success=1&id_commande="
+                    "Location: commandes.php?success=ajout&id_commande="
                     . $idCommande
                 );
 
@@ -438,7 +530,9 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             } catch (Throwable $e) {
 
 
-                /* Annuler la transaction */
+                /* =================================================
+                   ANNULER LA TRANSACTION
+                ================================================= */
 
                 if ($pdo->inTransaction()) {
 
@@ -446,7 +540,9 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                 }
 
 
-                /* Afficher l'erreur */
+                /* =================================================
+                   MESSAGE D'ERREUR
+                ================================================= */
 
                 $erreur =
                     "Impossible d'enregistrer la commande : "
@@ -458,507 +554,472 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
 ?>
 
-
 <!DOCTYPE html>
 
 <html lang="fr">
 
-
 <head>
 
-<meta charset="UTF-8">
+    <meta charset="UTF-8">
 
-<meta
-    name="viewport"
-    content="width=device-width, initial-scale=1.0"
->
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
 
-<title>Ajouter une commande</title>
+    <title>
+        Nouvelle commande - DORIANE AGROFEED
+    </title>
 
 
-<!-- Bootstrap -->
+    <!-- Bootstrap -->
 
-<link
-    rel="stylesheet"
-    href="bootstrap-5.0.2-dist/css/bootstrap.min.css"
->
+    <link
+        rel="stylesheet"
+        href="bootstrap-5.0.2-dist/css/bootstrap.min.css"
+    >
 
 
-<!-- Bootstrap Icons -->
+    <!-- Bootstrap Icons -->
 
-<link
-    rel="stylesheet"
-    href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"
->
+    <link
+        rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"
+    >
 
 
-<!-- CSS de la page -->
+    <style>
 
-<link
-    rel="stylesheet"
-    href="ajouter_commande.css"
->
+        /* =====================================================
+           PAGE
+        ===================================================== */
 
+        body {
 
-<style>
+            margin: 0;
 
-/* =========================================================
-   PAGE
-========================================================= */
+            background: #f5f7fa;
 
-body {
+            font-family:
+                Arial,
+                Helvetica,
+                sans-serif;
 
-    background: #f5f7fa;
+            color: #333;
+        }
 
-}
 
+        /* =====================================================
+           CONTENEUR
+        ===================================================== */
 
-/* =========================================================
-   CONTENEUR
-========================================================= */
+        .commande-container {
 
-.commande-container {
+            width: 94%;
 
-    width: 94%;
+            max-width: 1200px;
 
-    max-width: 1200px;
+            margin: 30px auto;
+        }
 
-    margin: 30px auto;
 
-}
+        /* =====================================================
+           EN-TÊTE
+        ===================================================== */
 
+        .page-header {
 
-/* =========================================================
-   EN-TÊTE
-========================================================= */
+            background: white;
 
-.commande-header {
+            padding: 25px;
 
-    background: white;
+            border-radius: 15px;
 
-    padding: 25px;
+            margin-bottom: 20px;
 
-    border-radius: 15px;
+            display: flex;
 
-    display: flex;
+            justify-content: space-between;
 
-    align-items: center;
+            align-items: center;
 
-    gap: 20px;
+            gap: 20px;
 
-    margin-bottom: 20px;
+            box-shadow:
+                0 5px 20px rgba(0,0,0,.07);
+        }
 
-    box-shadow:
-        0 5px 20px rgba(0,0,0,.07);
 
-}
+        .header-left {
 
+            display: flex;
 
-.header-icon {
+            align-items: center;
 
-    width: 60px;
+            gap: 18px;
+        }
 
-    height: 60px;
 
-    background: #198754;
+        .header-icon {
 
-    color: white;
+            width: 60px;
 
-    border-radius: 15px;
+            height: 60px;
 
-    display: flex;
+            border-radius: 15px;
 
-    align-items: center;
+            background: #198754;
 
-    justify-content: center;
+            color: white;
 
-    font-size: 30px;
+            display: flex;
 
-}
+            align-items: center;
 
+            justify-content: center;
 
-.commande-header h1 {
+            font-size: 28px;
+        }
 
-    margin: 0;
 
-    font-size: 28px;
+        .page-header h1 {
 
-    font-weight: 700;
+            margin: 0;
 
-}
+            font-size: 28px;
 
+            font-weight: 700;
+        }
 
-.commande-header p {
 
-    margin: 5px 0 0;
+        .page-header p {
 
-    color: #777;
+            margin: 5px 0 0;
 
-}
+            color: #777;
+        }
 
 
-/* =========================================================
-   CARDS
-========================================================= */
+        /* =====================================================
+           CARDS
+        ===================================================== */
 
-.card-section {
+        .card-section {
 
-    background: white;
+            background: white;
 
-    border-radius: 15px;
+            padding: 25px;
 
-    padding: 25px;
+            border-radius: 15px;
 
-    margin-bottom: 20px;
+            margin-bottom: 20px;
 
-    box-shadow:
-        0 5px 20px rgba(0,0,0,.06);
+            box-shadow:
+                0 5px 20px rgba(0,0,0,.06);
+        }
 
-}
 
+        /* =====================================================
+           TITRE SECTION
+        ===================================================== */
 
-/* =========================================================
-   TITRES
-========================================================= */
+        .section-title {
 
-.section-heading {
+            display: flex;
 
-    display: flex;
+            align-items: center;
 
-    align-items: center;
+            gap: 12px;
 
-    gap: 15px;
+            margin-bottom: 22px;
+        }
 
-    margin-bottom: 25px;
 
-}
+        .section-title-icon {
 
+            width: 45px;
 
-.section-icon {
+            height: 45px;
 
-    width: 45px;
+            border-radius: 10px;
 
-    height: 45px;
+            background: #e8f5ee;
 
-    border-radius: 10px;
+            color: #198754;
 
-    background: #e8f5ee;
+            display: flex;
 
-    color: #198754;
+            align-items: center;
 
-    display: flex;
+            justify-content: center;
 
-    align-items: center;
+            font-size: 21px;
+        }
 
-    justify-content: center;
 
-    font-size: 22px;
+        .section-title h2 {
 
-}
+            margin: 0;
 
+            font-size: 20px;
 
-.section-heading h2 {
+            font-weight: 700;
+        }
 
-    margin: 0;
 
-    font-size: 20px;
+        .section-title p {
 
-    font-weight: 700;
+            margin: 3px 0 0;
 
-}
+            color: #777;
 
+            font-size: 14px;
+        }
 
-.section-heading p {
 
-    margin: 3px 0 0;
+        /* =====================================================
+           LABELS
+        ===================================================== */
 
-    color: #777;
+        .form-label {
 
-    font-size: 14px;
+            font-weight: 600;
 
-}
+            color: #444;
+        }
 
 
-/* =========================================================
-   PRODUITS HEADER
-========================================================= */
+        /* =====================================================
+           PRODUIT
+        ===================================================== */
 
-.products-header {
+        .produit-row {
 
-    display: flex;
+            background: #fafafa;
 
-    justify-content: space-between;
+            border: 1px solid #e3e3e3;
 
-    align-items: center;
+            border-radius: 12px;
 
-    gap: 15px;
+            padding: 15px;
 
-    margin-bottom: 20px;
+            margin-bottom:12px;
+            display: grid;
 
-}
+            grid-template-columns:
+                40px
+                1fr
+                120px
+                45px;
 
+            align-items: end;
 
-/* =========================================================
-   LIGNE PRODUIT
-========================================================= */
+            gap: 15px;
+        }
 
-.produit-row {
 
-    display: flex;
+        .produit-number {
 
-    align-items: flex-end;
+            width: 36px;
 
-    gap: 15px;
+            height: 36px;
 
-    padding: 15px;
+            background: #198754;
 
-    border: 1px solid #e4e4e4;
+            color: white;
 
-    border-radius: 12px;
+            border-radius: 50%;
 
-    background: #fafafa;
+            display: flex;
 
-    margin-bottom: 12px;
+            align-items: center;
 
-}
+            justify-content: center;
 
+            font-weight: bold;
 
-.produit-number {
+            margin-bottom: 5px;
+        }
 
-    width: 38px;
 
-    height: 38px;
+        .produit-info {
 
-    flex-shrink: 0;
+            margin-top: 6px;
 
-    border-radius: 50%;
+            color: #777;
 
-    background: #198754;
+            font-size: 13px;
+        }
 
-    color: white;
 
-    display: flex;
+        .btn-supprimer {
 
-    align-items: center;
+            width: 40px;
 
-    justify-content: center;
+            height: 40px;
 
-    font-weight: bold;
+            border: none;
 
-}
+            border-radius: 8px;
 
+            background: #dc3545;
 
-.produit-field {
+            color: white;
 
-    min-width: 220px;
+            display: flex;
 
-}
+            align-items: center;
 
+            justify-content: center;
 
-.produit-details {
+            cursor: pointer;
+        }
 
-    min-width: 250px;
 
-}
+        .btn-supprimer:hover {
 
+            background: #bb2d3b;
+        }
 
-.produit-details h2 {
 
-    font-size: 14px;
+        /* =====================================================
+           TOTAL
+        ===================================================== */
 
-    line-height: 1.5;
+        .total-box {
 
-    margin: 0;
+            background: #f8fff9;
 
-    color: #34495e;
+            border: 2px solid #198754;
 
-}
+            border-radius: 15px;
 
+            padding: 20px;
 
-.quantite-field {
+            display: flex;
 
-    min-width: 100px;
+            justify-content: space-between;
 
-}
+            align-items: center;
 
+            margin-bottom: 20px;
+        }
 
-.action-field {
 
-    min-width: 45px;
+        .total-label {
 
-}
+            font-size: 17px;
 
+            font-weight: 600;
+        }
 
-/* =========================================================
-   TÉLÉPHONE
-========================================================= */
 
-.telephone-info {
+        #total {
 
-    font-size: 12px;
+            font-size: 25px;
 
-    color: #6c757d;
+            font-weight: 700;
 
-    margin-top: 6px;
+            color: #198754;
+        }
 
-}
 
+        /* =====================================================
+           ACTIONS
+        ===================================================== */
 
-/* =========================================================
-   TOTAL
-========================================================= */
+        .actions {
 
-.total-box {
+            background: white;
 
-    background: white;
+            padding: 20px;
 
-    border: 2px solid #198754;
+            border-radius: 15px;
 
-    border-radius: 15px;
+            box-shadow:
+                0 5px 20px rgba(0,0,0,.06);
 
-    padding: 20px;
+            display: flex;
 
-    margin-bottom: 20px;
+            justify-content: space-between;
 
-}
+            gap: 15px;
+        }
 
 
-#total {
+        .btn-retour {
 
-    font-size: 25px;
+            display: inline-flex;
 
-}
+            align-items: center;
 
+            gap: 8px;
+        }
 
-/* =========================================================
-   BOUTONS
-========================================================= */
 
-.actions {
+        /* =====================================================
+           MOBILE
+        ===================================================== */
 
-    background: white;
+        @media(max-width: 768px) {
 
-    padding: 20px;
+            .page-header {
 
-    border-radius: 15px;
+                flex-direction: column;
 
-    box-shadow:
-        0 5px 20px rgba(0,0,0,.06);
+                align-items: stretch;
+            }
 
-}
 
+            .page-header h1 {
 
-.btn-retour {
+                font-size: 22px;
+            }
 
-    display: inline-flex;
 
-    align-items: center;
+            .produit-row {
 
-    gap: 7px;
+                grid-template-columns: 1fr;
 
-}
+            }
 
 
-/* =========================================================
-   MOBILE
-========================================================= */
+            .produit-number {
 
-@media(max-width:768px) {
+                margin-bottom: 0;
+            }
 
-    .commande-container {
 
-        width: 94%;
+            .btn-supprimer {
 
-        margin: 15px auto;
+                width: 100%;
+            }
 
-    }
 
+            .total-box {
 
-    .commande-header {
+                flex-direction: column;
 
-        padding: 18px;
+                align-items: flex-start;
 
-    }
+                gap: 10px;
+            }
 
 
-    .commande-header h1 {
+            .actions {
 
-        font-size: 22px;
+                flex-direction: column;
+            }
 
-    }
 
+            .actions a,
+            .actions button {
 
-    .products-header {
+                width: 100%;
+            }
+        }
 
-        flex-direction: column;
-
-        align-items: stretch;
-
-    }
-
-
-    .produit-row {
-
-        flex-direction: column;
-
-        align-items: stretch;
-
-    }
-
-
-    .produit-number {
-
-        align-self: flex-start;
-
-    }
-
-
-    .produit-field,
-    .produit-details,
-    .quantite-field,
-    .action-field {
-
-        width: 100%;
-
-        min-width: 100%;
-
-    }
-
-
-    .actions {
-
-        flex-direction: column;
-
-        gap: 10px;
-
-    }
-
-
-    .actions a,
-    .actions button {
-
-        width: 100%;
-
-    }
-
-}
-
-
-/* =========================================================
-   IMPRESSION
-========================================================= */
-
-@media print {
-
-    .no-print {
-
-        display: none !important;
-
-    }
-
-}
-
-</style>
+    </style>
 
 </head>
 
@@ -969,242 +1030,31 @@ body {
 <div class="commande-container">
 
 
-<!-- =====================================================
-     EN-TÊTE
-===================================================== -->
+    <!-- =====================================================
+         EN-TÊTE
+    ===================================================== -->
 
-<div class="commande-header">
+    <div class="page-header">
 
 
-    <div class="header-icon">
+        <div class="header-left">
 
-        <i class="bi bi-cart-plus"></i>
 
-    </div>
+            <div class="header-icon">
 
-
-    <div>
-
-        <h1>
-            Nouvelle commande
-        </h1>
-
-        <p>
-            Enregistrez les informations du client
-            et les produits commandés.
-        </p>
-
-    </div>
-
-</div>
-
-
-
-<!-- =====================================================
-     MESSAGE DE SUCCÈS
-===================================================== -->
-
-<?php if ($succes !== ""): ?>
-
-<div class="alert alert-success alert-dismissible fade show">
-
-
-    <i class="bi bi-check-circle-fill"></i>
-
-    <strong>
-        <?= htmlspecialchars($succes) ?>
-    </strong>
-
-
-    <?php if ($idCommandeSucces): ?>
-
-        <br>
-
-        Votre numéro de commande est :
-
-        <strong>
-            #<?= $idCommandeSucces ?>
-        </strong>
-
-    <?php endif; ?>
-
-
-    <button
-        type="button"
-        class="btn-close"
-        data-bs-dismiss="alert">
-    </button>
-
-</div>
-
-<?php endif; ?>
-
-
-
-<!-- =====================================================
-     MESSAGE D'ERREUR
-===================================================== -->
-
-<?php if ($erreur !== ""): ?>
-
-<div class="alert alert-danger alert-dismissible fade show">
-
-
-    <i class="bi bi-exclamation-triangle-fill"></i>
-
-    <strong>
-        Erreur
-    </strong>
-
-    <br>
-
-    <?= htmlspecialchars($erreur) ?>
-
-
-    <button
-        type="button"
-        class="btn-close"
-        data-bs-dismiss="alert">
-    </button>
-
-</div>
-
-<?php endif; ?>
-
-
-
-<!-- =====================================================
-     FORMULAIRE
-===================================================== -->
-
-<form
-    method="POST"
-    id="commandeForm"
->
-
-
-<!-- =====================================================
-     INFORMATIONS CLIENT
-===================================================== -->
-
-<div class="card-section">
-
-
-    <div class="section-heading">
-
-
-        <div class="section-icon">
-
-            <i class="bi bi-person-fill"></i>
-
-        </div>
-
-
-        <div>
-
-            <h2>
-                Informations du client
-            </h2>
-            <p>
-                Entrez vos coordonnées.
-            </p>
-
-        </div>
-
-    </div>
-
-
-    <div class="row">
-
-
-        <div class="col-md-4 mb-3">
-
-            <label class="form-label">
-                Nom <span>*</span>
-            </label>
-
-            <input
-                type="text"
-                name="nom"
-                class="form-control"
-                placeholder="Votre nom"
-                required
-            >
-
-        </div>
-
-
-        <div class="col-md-4 mb-3">
-
-            <label class="form-label">
-                Prénom <span>*</span>
-            </label>
-
-            <input
-                type="text"
-                name="prenom"
-                class="form-control"
-                placeholder="Votre prénom"
-                required
-            >
-
-        </div>
-
-
-        <div class="col-md-4 mb-3">
-
-            <label class="form-label">
-
-                Numéro de téléphone <span>*</span>
-
-            </label>
-
-            <input
-                type="tel"
-                name="telephone"
-                class="form-control"
-                placeholder="Ex : 6XXXXXXXX"
-                required
-            >
-
-            <div class="telephone-info">
-
-                <i class="bi bi-info-circle"></i>
-
-                Vous pouvez saisir votre nouveau numéro.
+                <i class="bi bi-cart-plus-fill"></i>
 
             </div>
 
-        </div>
-
-    </div>
-
-</div>
-
-
-<!-- =====================================================
-     PRODUITS
-===================================================== -->
-
-<div class="card-section">
-
-
-    <div class="products-header">
-
-        <div class="section-heading">
-
-            <div class="section-icon">
-
-                <i class="bi bi-box-seam-fill"></i>
-
-            </div>
 
             <div>
 
-                <h2>Produits commandés</h2>
+                <h1>
+                    Nouvelle commande
+                </h1>
 
                 <p>
-                    Ajoutez un ou plusieurs produits.
+                    Enregistrez une nouvelle commande client.
                 </p>
 
             </div>
@@ -1212,473 +1062,1147 @@ body {
         </div>
 
 
-        <button
-            type="button"
-            class="btn btn-success"
-            onclick="ajouterProduit()">
+        <a
+            href="commandes.php"
+            class="btn btn-outline-secondary"
+        >
 
-            <i class="bi bi-plus-circle"></i>
+            <i class="bi bi-arrow-left"></i>
 
-            Ajouter un produit
+            Retour aux commandes
 
-        </button>
+        </a>
 
     </div>
 
 
-    <div id="produits-container">
+
+    <!-- =====================================================
+         ERREUR
+    ===================================================== -->
+
+    <?php if ($erreur !== ""): ?>
+
+        <div class="alert alert-danger alert-dismissible fade show">
+
+            <i class="bi bi-exclamation-triangle-fill"></i>
+
+            <strong>
+                Erreur
+            </strong>
+
+            <br>
+
+            <?= htmlspecialchars($erreur) ?>
+
+            <button
+                type="button"
+                class="btn-close"
+                data-bs-dismiss="alert"
+            ></button>
+
+        </div>
+
+    <?php endif; ?>
 
 
-        <div class="produit-row mb-3">
+
+    <!-- =====================================================
+         FORMULAIRE
+    ===================================================== -->
+
+    <form
+        method="POST"
+        id="commandeForm"
+    >
 
 
-            <div class="produit-number">
-                1
+        <!-- =================================================
+             INFORMATIONS CLIENT
+        ================================================= -->
+
+        <div class="card-section">
+
+
+            <div class="section-title">
+
+
+                <div class="section-title-icon">
+
+                    <i class="bi bi-person-fill"></i>
+
+                </div>
+
+
+                <div>
+
+                    <h2>
+                        Informations du client
+                    </h2>
+
+                    <p>
+                        Renseignez les informations du client.
+                    </p>
+
+                </div>
+
             </div>
 
 
-            <div
-                class="produit-field"
-                style="flex:2;">
 
-                <label>
-                    Produit
-                </label>
+            <div class="row g-3">
 
-                <select
-                    name="produit[]"
-                    class="form-select produit-select"
-                    onchange="mettreAJourDetails(this)"
-                    required>
 
-                    <option value="">
-                        -- Choisir un produit --
-                    </option>
+                <!-- NOM -->
 
-                    <?php foreach ($produits as $p): ?>
+                <div class="col-md-4">
 
-                    <option
-                        value="<?= (int)$p["id_produit"] ?>"
-                        data-nom="<?= htmlspecialchars($p["nom_produit"]) ?>"
-                        data-details="<?= htmlspecialchars($p["description"] ?? "Aucun détail") ?>"
-                        data-prix="<?= htmlspecialchars($p["prix"]) ?>"
-                        <?= (
-                            $produitSelectionne &&
-                            $produitSelectionne["id_produit"]
-                            == $p["id_produit"]
-                        ) ? "selected" : "" ?>
+                    <label
+                        for="nom"
+                        class="form-label"
+                    >
+                        Nom
+                    </label>
+
+                    <input
+                        type="text"
+                        name="nom"
+                        id="nom"
+                        class="form-control"
+                        placeholder="Nom du client"
+                        value="<?= htmlspecialchars($_POST["nom"] ?? "") ?>"
+                        required
                     >
 
-                        <?= htmlspecialchars($p["nom_produit"]) ?>
-
-                    </option>
-
-                    <?php endforeach; ?>
-
-                </select>
-
-            </div>
+                </div>
 
 
-            <div
-                class="produit-details"
-                style="flex:2;">
+                <!-- PRÉNOM -->
 
-                <label>&nbsp;</label>
+                <div class="col-md-4">
 
-                <h2>
-                    <em>
-                        Sélectionnez un produit
-                    </em>
-                </h2>
+                    <label
+                        for="prenom"
+                        class="form-label"
+                    >
+                        Prénom
+                    </label>
 
-            </div>
+                    <input
+                        type="text"
+                        name="prenom"
+                        id="prenom"
+                        class="form-control"
+                        placeholder="Prénom du client"
+                        value="<?= htmlspecialchars($_POST["prenom"] ?? "") ?>"
+                        required
+                    >
 
-
-            <div
-                class="quantite-field"
-                style="flex:1;">
-
-                <label>
-                    Quantité
-                </label>
-
-                <input
-                    type="number"
-                    name="quantite[]"
-                    class="form-control quantite-input"
-                    min="1"
-                    value="1"
-                    required
-                    oninput="calculerTotal()"
-                >
-
-            </div>
+                </div>
 
 
-            <div class="action-field">
+                <!-- TÉLÉPHONE -->
 
-                <label>&nbsp;</label>
+                <div class="col-md-4">
 
-                <button
-                    type="button"
-                    class="btn btn-danger"
-                    onclick="supprimerProduit(this)">
+                    <label
+                        for="telephone"
+                        class="form-label"
+                    >
+                        Téléphone
+                    </label>
 
-                    <i class="bi bi-trash"></i>
+                    <input
+                        type="text"
+                        name="telephone"
+                        id="telephone"
+                        class="form-control"
+                        placeholder="+237 6XXXXXXXX"
+                        value="<?= htmlspecialchars($_POST["telephone"] ?? "") ?>"
+                        required
+                    >
 
-                </button>
+                    <div class="form-text">
+
+                        <i class="bi bi-info-circle"></i>
+
+                        Le téléphone permet de retrouver automatiquement le client.
+
+                    </div>
+
+                </div>
 
             </div>
-
 
         </div>
 
-    </div>
 
 
-    <button
-        type="button"
-        class="btn btn-outline-success w-100 mt-2"
-        onclick="ajouterProduit()">
+        <!-- =================================================
+             PRODUITS
+        ================================================= -->
 
-        <i class="bi bi-plus-circle"></i>
-
-        Ajouter un autre produit
-
-    </button>
-
-</div>
+        <div class="card-section">
 
 
-<!-- =====================================================
-     TOTAL
-===================================================== -->
+            <div class="section-title">
 
-<div
-    class="total-box d-flex justify-content-between align-items-center p-3 bg-light rounded mb-3">
 
-    <div>
+                <div class="section-title-icon">
 
-        <small class="text-muted">
-            TOTAL DE LA COMMANDE
-        </small>
+                    <i class="bi bi-box-seam-fill"></i>
 
-        <div class="fw-bold">
-            Montant total
+                </div>
+
+
+                <div>
+
+                    <h2>
+                        Produits commandés
+                    </h2>
+
+                    <p>
+                        Sélectionnez les produits et indiquez les quantités.
+                    </p>
+
+                </div>
+
+            </div>
+
+
+
+            <div id="produitsContainer">
+
+
+                <!-- =========================================
+                     PRODUIT PRÉ-SÉLECTIONNÉ
+                ========================================= -->
+
+                <?php if ($produitSelectionne): ?>
+
+                    <div class="produit-row">
+
+
+                        <div class="produit-number">
+                            1
+                        </div>
+
+
+                        <div>
+
+                            <label class="form-label">
+                                Produit
+                            </label>
+
+                            <select
+                                name="produit[]"
+                                class="form-select produit-select"
+                                required
+                            >
+
+                                <option value="">
+                                    Sélectionner un produit
+                                </option>
+
+
+                                <?php foreach (
+                                    $produits
+                                    as
+                                    $produit
+                                ): ?>
+
+                                    <option
+                                        value="<?= (int) $produit["id_produit"] ?>"
+                                        data-prix="<?= (float) $produit["prix"] ?>"
+                                        data-stock="<?= (int) $produit["stock"] ?>"
+                                        <?= (
+                                            (int)$produit["id_produit"]
+                                            ===
+                                            (int)$produitSelectionne["id_produit"]
+                                        )
+                                            ? "selected"
+                                            : ""
+                                        ?>
+                                    >
+
+                                        <?= htmlspecialchars(
+                                            $produit["nom_produit"]
+                                        ) ?>
+
+                                        -
+                                        <?= number_format(
+                                            $produit["prix"],
+                                            0,
+                                            ",",
+                                            " "
+                                        ) ?>
+
+                                        FCFA
+
+                                    </option>
+
+                                <?php endforeach; ?>
+
+                            </select>
+
+
+                            <div class="produit-info">
+
+                                Stock :
+
+                                <span class="stock-info">
+
+                                    <?= (int) $produitSelectionne["stock"] ?>
+
+                                </span>
+
+                                unité(s)
+
+                            </div>
+
+                        </div>
+
+
+                        <div>
+
+                            <label class="form-label">
+                                Quantité
+                            </label>
+
+                            <input
+                                type="number"
+                                name="quantite[]"
+                                class="form-control quantite-input"
+                                value="1"
+                                min="1"
+                                max="<?= (int) $produitSelectionne["stock"] ?>"
+                                required
+                            >
+
+                        </div>
+
+
+                        <button
+                            type="button"
+                            class="btn-supprimer supprimer-produit"
+                            title="Supprimer"
+                        >
+
+                            <i class="bi bi-trash-fill"></i>
+
+                        </button>
+
+                    </div>
+
+
+                <?php else: ?>
+
+
+                    <!-- =====================================
+                         PREMIÈRE LIGNE
+                    ===================================== -->
+
+                    <div class="produit-row">
+
+
+                        <div class="produit-number">
+                            1
+                        </div>
+
+
+                        <div>
+
+                            <label class="form-label">
+                                Produit
+                            </label>
+
+                            <select
+                                name="produit[]"
+                                class="form-select produit-select"
+                                required
+                            >
+
+                                <option value="">
+                                    Sélectionner un produit
+                                </option>
+
+
+                                <?php foreach (
+                                    $produits
+                                    as
+                                    $produit
+                                ): ?>
+
+                                    <option
+                                        value="<?= (int) $produit["id_produit"] ?>"
+                                        data-prix="<?= (float) $produit["prix"] ?>"
+                                        data-stock="<?= (int) $produit["stock"] ?>"
+                                    >
+
+                                        <?= htmlspecialchars(
+                                            $produit["nom_produit"]
+                                        ) ?>
+
+                                        -
+                                        <?= number_format(
+                                            $produit["prix"],
+                                            0,
+                                            ",",
+                                            " "
+                                        ) ?>
+
+                                        FCFA
+
+                                    </option>
+
+                                <?php endforeach; ?>
+
+                            </select>
+
+
+                            <div class="produit-info">
+
+                                Stock :
+
+                                <span class="stock-info">
+                                    -
+                                </span>
+
+                            </div>
+
+                        </div>
+
+
+                        <div>
+
+                            <label class="form-label">
+                                Quantité
+                            </label>
+
+                            <input
+                                type="number"
+                                name="quantite[]"
+                                class="form-control quantite-input"
+                                value="1"
+                                min="1"
+                                required
+                            >
+
+                        </div>
+
+
+                        <button
+                            type="button"
+                            class="btn-supprimer supprimer-produit"
+                            title="Supprimer"
+                        >
+
+                            <i class="bi bi-trash-fill"></i>
+
+                        </button>
+
+                    </div>
+
+                <?php endif; ?>
+
+
+            </div>
+
+
+
+            <!-- =================================================
+                 AJOUTER PRODUIT
+            ================================================= -->
+
+            <button
+                type="button"
+                class="btn btn-outline-success"
+                id="ajouterProduit"
+            >
+
+                <i class="bi bi-plus-circle-fill"></i>
+
+                Ajouter un produit
+
+            </button>
+
         </div>
 
-    </div>
 
 
-    <strong
-        id="total"
-        class="fs-4 text-success">
+        <!-- =================================================
+             TOTAL
+        ================================================= -->
 
-        0 FCFA
+        <div class="total-box">
 
-    </strong>
+
+            <div class="total-label">
+
+                <i class="bi bi-calculator"></i>
+
+                Total de la commande
+
+            </div>
+
+
+            <div id="total">
+
+                0 FCFA
+
+            </div>
+
+        </div>
+
+
+
+        <!-- =================================================
+             ACTIONS
+        ================================================= -->
+
+        <div class="actions">
+
+
+            <a
+                href="commandes.php"
+                class="btn btn-outline-secondary btn-retour"
+            >
+
+                <i class="bi bi-arrow-left"></i>
+
+                Annuler
+
+            </a>
+
+
+            <button
+                type="submit"
+                class="btn btn-success"
+            >
+
+                <i class="bi bi-check-circle-fill"></i>
+
+                Enregistrer la commande
+
+            </button>
+
+        </div>
+
+
+    </form>
+
 
 </div>
 
-
-<!-- =====================================================
-     BOUTONS
-===================================================== -->
-
-<div class="actions d-flex justify-content-between">
-
-
-    <!-- RETOUR PRODUITS -->
-
-    <a
-        href="commandes.php"
-        class="btn btn-light">
-
-        <i class="bi bi-arrow-left"></i>
-
-        Annuler
-
-    </a>
-
-
-    <!-- ENREGISTRER -->
-
-    <button
-        type="submit"
-        class="btn btn-success">
-
-        <i class="bi bi-check-circle-fill"></i>
-
-        Enregistrer la commande
-
-    </button>
-
-</div>
-
-
-</form>
-
-
-</div>
-
-
-<script
-src="bootstrap-5.0.2-dist/js/bootstrap.bundle.min.js">
-</script>
 
 
 <script>
 
-/* =========================================================
-   DÉTAILS PRODUIT
-========================================================= */
+document.addEventListener(
+    "DOMContentLoaded",
+    function () {
 
-function mettreAJourDetails(select) {
 
-    const row =
-        select.closest(".produit-row");
+        /* =================================================
+           ÉLÉMENTS
+        ================================================= */
 
-    const details =
-        row.querySelector(".produit-details");
+        const container =
+            document.getElementById(
+                "produitsContainer"
+            );
 
-    const option =
-        select.options[select.selectedIndex];
+        const boutonAjouter =
+            document.getElementById(
+                "ajouterProduit"
+            );
 
+        const totalElement =
+            document.getElementById(
+                "total"
+            );
 
-    if (option && option.value) {
 
-        const nom =
-            option.dataset.nom;
+        /* =================================================
+           METTRE À JOUR LES NUMÉROS
+        ================================================= */
 
-        const description =
-            option.dataset.details;
+        function mettreAJourNumeros() {
 
-        const prix =
-            parseFloat(option.dataset.prix) || 0;
+            const lignes =
+                container.querySelectorAll(
+                    ".produit-row"
+                );
 
+            lignes.forEach(
+                function (ligne, index) {
 
-        details.innerHTML = `
+                    const numero =
+                        ligne.querySelector(
+                            ".produit-number"
+                        );
 
-            <label>&nbsp;</label>
+                    if (numero) {
 
-            <h2>
+                        numero.textContent =
+                            index + 1;
+                    }
+                }
+            );
+        }
 
-                <strong>${nom}</strong>
 
-                <br>
+        /* =================================================
+           METTRE À JOUR LE STOCK
+        ================================================= */
 
-                ${description}
-
-                <br>
-
-                <span class="text-success">
-
-                    ${prix.toLocaleString("fr-FR")}
-                    FCFA
-
-                </span>
-
-            </h2>
-
-        `;
-
-    } else {
-
-        details.innerHTML = `
-
-            <label>&nbsp;</label>
-
-            <h2>
-
-                <em>
-                    Sélectionnez un produit
-                </em>
-
-            </h2>
-
-        `;
-    }
-
-
-    calculerTotal();
-}
-
-
-/* =========================================================
-   AJOUTER PRODUIT
-========================================================= */
-
-function ajouterProduit() {
-
-    const container =
-        document.getElementById("produits-container");
-
-    const premiereLigne =
-        document.querySelector(".produit-row");
-
-    const nouvelleLigne =
-        premiereLigne.cloneNode(true);
-
-
-    nouvelleLigne
-        .querySelector(".produit-select")
-        .value = "";
-
-
-    nouvelleLigne
-        .querySelector(".quantite-input")
-        .value = 1;
-
-
-    nouvelleLigne
-        .querySelector(".produit-details")
-        .innerHTML = `
-
-            <label>&nbsp;</label>
-
-            <h2>
-
-                <em>
-                    Sélectionnez un produit
-                </em>
-
-            </h2>
-
-        `;
-
-
-    container.appendChild(nouvelleLigne);
-
-    numeroterLignes();
-
-    calculerTotal();
-}
-
-
-/* =========================================================
-   SUPPRIMER PRODUIT
-========================================================= */
-
-function supprimerProduit(button) {
-
-    const lignes =
-        document.querySelectorAll(".produit-row");
-
-
-    if (lignes.length === 1) {
-
-        alert(
-            "Une commande doit contenir au moins un produit."
-        );
-
-        return;
-    }
-
-
-    button
-        .closest(".produit-row")
-        .remove();
-
-
-    numeroterLignes();
-
-    calculerTotal();
-}
-
-
-/* =========================================================
-   NUMÉROTATION
-========================================================= */
-
-function numeroterLignes() {
-
-    document
-        .querySelectorAll(".produit-row")
-        .forEach((ligne, index) => {
-
-            ligne
-                .querySelector(".produit-number")
-                .textContent = index + 1;
-
-        });
-}
-
-
-/* =========================================================
-   TOTAL
-========================================================= */
-
-function calculerTotal() {
-
-    let total = 0;
-
-
-    document
-        .querySelectorAll(".produit-row")
-        .forEach(ligne => {
+        function mettreAJourStock(ligne) {
 
             const select =
-                ligne.querySelector(".produit-select");
+                ligne.querySelector(
+                    ".produit-select"
+                );
 
-            const quantite =
-                ligne.querySelector(".quantite-input");
+            const input =
+                ligne.querySelector(
+                    ".quantite-input"
+                );
+
+            const stockInfo =
+                ligne.querySelector(
+                    ".stock-info"
+                );
+
+
+            if (!select) {
+                return;
+            }
 
 
             const option =
-                select.options[select.selectedIndex];
+                select.options[
+                    select.selectedIndex
+                ];
 
 
             if (
                 option &&
-                option.value &&
-                option.dataset.prix
+                option.dataset.stock
             ) {
 
-                const prix =
-                    parseFloat(option.dataset.prix) || 0;
+                const stock =
+                    parseInt(
+                        option.dataset.stock
+                    );
 
-                const qte =
-                    parseInt(quantite.value) || 0;
+
+                stockInfo.textContent =
+                    stock;
 
 
-                total += prix * qte;
+                input.max =
+                    stock;
+
+
+                if (
+                parseInt(input.value) >
+                    stock
+                ) {
+
+                    input.value =
+                        stock;
+                }
+
+            } else {
+
+                stockInfo.textContent =
+                    "-";
+
+                input.removeAttribute(
+                    "max"
+                );
             }
 
-        });
+
+            calculerTotal();
+        }
 
 
-    document.getElementById("total").textContent =
-        total.toLocaleString("fr-FR") + " FCFA";
-}
+        /* =================================================
+           CALCULER TOTAL
+        ================================================= */
+
+        function calculerTotal() {
+
+            let total = 0;
 
 
-/* =========================================================
-   INITIALISATION
-========================================================= */
+            const lignes =
+                container.querySelectorAll(
+                    ".produit-row"
+                );
 
-document.addEventListener(
-    "DOMContentLoaded",
-    function() {
 
-        numeroterLignes();
+            lignes.forEach(
+                function (ligne) {
+
+                    const select =
+                        ligne.querySelector(
+                            ".produit-select"
+                        );
+
+                    const quantite =
+                        ligne.querySelector(
+                            ".quantite-input"
+                        );
+
+
+                    if (
+                        !select ||
+                        !quantite
+                    ) {
+
+                        return;
+                    }
+
+
+                    const option =
+                        select.options[
+                            select.selectedIndex
+                        ];
+
+
+                    if (!option) {
+                        return;
+                    }
+
+
+                    const prix =
+                        parseFloat(
+                            option.dataset.prix
+                            || 0
+                        );
+
+
+                    const qte =
+                        parseInt(
+                            quantite.value
+                            || 0
+                        );
+
+
+                    total +=
+                        prix * qte;
+                }
+            );
+
+
+            totalElement.textContent =
+                new Intl.NumberFormat(
+                    "fr-FR"
+                ).format(total)
+                + " FCFA";
+        }
+
+
+        /* =================================================
+           ÉCOUTER LES CHANGEMENTS
+        ================================================= */
+
+        function initialiserLigne(ligne) {
+
+            const select =
+                ligne.querySelector(
+                    ".produit-select"
+                );
+
+            const quantite =
+                ligne.querySelector(
+                    ".quantite-input"
+                );
+
+
+            if (select) {
+
+                select.addEventListener(
+                    "change",
+                    function () {
+
+                        mettreAJourStock(
+                            ligne
+                        );
+                    }
+                );
+            }
+
+
+            if (quantite) {
+
+                quantite.addEventListener(
+                    "input",
+                    function () {
+
+                        calculerTotal();
+                    }
+                );
+            }
+
+
+            mettreAJourStock(
+                ligne
+            );
+        }
+
+
+        /* =================================================
+           AJOUTER UNE LIGNE
+        ================================================= */
+
+        boutonAjouter.addEventListener(
+            "click",
+            function () {
+
+
+                const ligne =
+                    document.createElement(
+                        "div"
+                    );
+
+
+                ligne.className =
+                    "produit-row";
+
+
+                ligne.innerHTML = `
+
+                    <div class="produit-number">
+                        1
+                    </div>
+
+
+                    <div>
+
+                        <label class="form-label">
+                            Produit
+                        </label>
+
+                        <select
+                            name="produit[]"
+                            class="form-select produit-select"
+                            required
+                        >
+
+                            <option value="">
+                                Sélectionner un produit
+                            </option>
+
+                            <?php foreach (
+                                $produits
+                                as
+                                $produit
+                            ): ?>
+
+                                <option
+                                    value="<?= (int) $produit["id_produit"] ?>"
+                                    data-prix="<?= (float) $produit["prix"] ?>"
+                                    data-stock="<?= (int) $produit["stock"] ?>"
+                                >
+
+                                    <?= htmlspecialchars(
+                                        $produit["nom_produit"],
+                                        ENT_QUOTES,
+                                        "UTF-8"
+                                    ) ?>
+
+                                    -
+                                    <?= number_format(
+                                        $produit["prix"],
+                                        0,
+                                        ",",
+                                        " "
+                                    ) ?>
+
+                                    FCFA
+
+                                </option>
+
+                            <?php endforeach; ?>
+
+                        </select>
+
+
+                        <div class="produit-info">
+
+                            Stock :
+
+                            <span class="stock-info">
+                                -
+                            </span>
+
+                        </div>
+
+                    </div>
+
+
+                    <div>
+
+                        <label class="form-label">
+                            Quantité
+                        </label>
+
+                        <input
+                            type="number"
+                            name="quantite[]"
+                            class="form-control quantite-input"
+                            value="1"
+                            min="1"
+                            required
+                        >
+
+                    </div>
+
+
+                    <button
+                        type="button"
+                        class="btn-supprimer supprimer-produit"
+                        title="Supprimer"
+                    >
+
+                        <i class="bi bi-trash-fill"></i>
+
+                    </button>
+
+                `;
+
+
+                container.appendChild(
+                    ligne
+                );
+
+
+                initialiserLigne(
+                    ligne
+                );
+
+
+                mettreAJourNumeros();
+
+
+                calculerTotal();
+            }
+        );
+
+
+        /* =================================================
+           SUPPRIMER UNE LIGNE
+        ================================================= */
+
+        container.addEventListener(
+            "click",
+            function (event) {
+
+
+                const bouton =
+                    event.target.closest(
+                        ".supprimer-produit"
+                    );
+
+
+                if (!bouton) {
+                    return;
+                }
+
+
+                const lignes =
+                    container.querySelectorAll(
+                        ".produit-row"
+                    );
+
+
+                /*
+                 * Empêcher de supprimer
+                 * la dernière ligne.
+                 */
+
+                if (lignes.length <= 1) {
+
+                    alert(
+                        "Une commande doit contenir au moins un produit."
+                    );
+
+                    return;
+                }
+
+
+                const ligne =
+                    bouton.closest(
+                        ".produit-row"
+                    );
+
+
+                if (ligne) {
+
+                    ligne.remove();
+                }
+
+
+                mettreAJourNumeros();
+
+                calculerTotal();
+            }
+        );
+
+
+        /* =================================================
+           INITIALISER LES LIGNES EXISTANTES
+        ================================================= */
+
+        const lignes =
+            container.querySelectorAll(
+                ".produit-row"
+            );
+
+
+        lignes.forEach(
+            function (ligne) {
+
+                initialiserLigne(
+                    ligne
+                );
+            }
+        );
+
+
+        mettreAJourNumeros();
 
         calculerTotal();
 
 
-        const select =
-            document.querySelector(".produit-select");
+        /* =================================================
+           VALIDATION AVANT ENVOI
+        ================================================= */
+
+        document
+            .getElementById(
+                "commandeForm"
+            )
+            .addEventListener(
+                "submit",
+                function (event) {
 
 
-        if (select && select.value) {
+                    const lignes =
+                        container.querySelectorAll(
+                            ".produit-row"
+                        );
 
-            mettreAJourDetails(select);
-        }
+
+                    if (
+                        lignes.length === 0
+                    ) {
+
+                        event.preventDefault();
+
+                        alert(
+                            "Veuillez ajouter au moins un produit."
+                        );
+
+                        return;
+                    }
+
+
+                    let valide =
+                        true;
+
+
+                    lignes.forEach(
+                        function (ligne) {
+
+                            const select =
+                                ligne.querySelector(
+                                    ".produit-select"
+                                );
+
+                            const quantite =
+                                ligne.querySelector(
+                                    ".quantite-input"
+                                );
+
+
+                            if (
+                                !select.value ||
+                                parseInt(
+                                    quantite.value
+                                ) <= 0
+                            ) {
+
+                                valide =
+                                    false;
+                            }
+
+
+                            const option =
+                                select.options[
+                                    select.selectedIndex
+                                ];
+
+
+                            if (
+                                option &&
+                                option.dataset.stock
+                            ) {
+
+                                const stock =
+                                    parseInt(
+                                        option.dataset.stock
+                                    );
+
+
+                                const qte =
+                                    parseInt(
+                                        quantite.value
+                                    );
+
+
+                                if (
+                                    qte > stock
+                                ) {
+
+                                    valide =
+                                        false;
+
+                                    alert(
+                                        "La quantité demandée dépasse le stock disponible."
+                                    );
+                                }
+                            }
+                        }
+                    );
+
+
+                    if (!valide) {
+
+                        event.preventDefault();
+
+                        alert(
+                            "Veuillez vérifier les produits et les quantités."
+                        );
+                    }
+
+                }
+            );
 
     }
 );
 
 </script>
 
+
+<script
+    src="bootstrap-5.0.2-dist/js/bootstrap.bundle.min.js"
+></script>
+
+
 </body>
+
 </html>

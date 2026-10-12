@@ -1,346 +1,1141 @@
 <?php
-include "connexions.php";
 
-// -------------------------------------------------------------------------
-// AUTOMATISATION : Insérer automatiquement les commandes validées/livrées dans la table vente
-// -------------------------------------------------------------------------
+session_start();
+
+require_once "connexions.php";
+
+
+/* =========================================================
+   INITIALISATION
+========================================================= */
+
+$messageErreur = "";
+
+$recherche = "";
+$dateDebut = "";
+$dateFin = "";
+
+$ventes = [];
+
+
+/* =========================================================
+   RÉCUPÉRATION DES FILTRES
+========================================================= */
+
+if (isset($_GET["recherche"])) {
+    $recherche = trim($_GET["recherche"]);
+}
+
+if (isset($_GET["date_debut"])) {
+    $dateDebut = trim($_GET["date_debut"]);
+}
+
+if (isset($_GET["date_fin"])) {
+    $dateFin = trim($_GET["date_fin"]);
+}
+
+
+/* =========================================================
+   STATISTIQUES
+========================================================= */
+
+$totalVentes = 0;
+$chiffreAffaires = 0;
+$ventesMois = 0;
+$ventesAujourdhui = 0;
+
+
 try {
-    // 1. Récupérer les commandes qui sont validées ou livrées mais qui n'ont pas encore de vente associée
-    $sqlCommandesValidees = "
-        SELECT c.id_commande, 
-               COALESCE(SUM(lc.sous_total), 0) AS total_montant
-        FROM commande c
-        LEFT JOIN ligne_commande lc ON c.id_commande = lc.id_commande
-        WHERE (c.statut = 'Validée' OR c.statut = 'Livrée')
-          AND c.id_commande NOT IN (SELECT id_commande FROM vente)
-        GROUP BY c.id_commande
-    ";
-    
-    $stmtCmd = $pdo->query($sqlCommandesValidees);
-    $commandesAConvertir = $stmtCmd->fetchAll(PDO::FETCH_ASSOC);
 
-    // 2. Insérer chaque commande trouvée dans la table 'vente'
-    if (!empty($commandesAConvertir)) {
-        $insertVente = $pdo->prepare("
-            INSERT INTO vente (id_commande, montant, date_vente) 
-            VALUES (?, ?, NOW())
-        ");
-        
-        foreach ($commandesAConvertir as $cmd) {
-            $insertVente->execute([
-                $cmd['id_commande'], 
-                $cmd['total_montant']
-            ]);
-        }
-    }
+    /* TOTAL DES VENTES */
+
+    $stmt = $pdo->query("
+        SELECT COUNT(*) AS total
+        FROM vente
+    ");
+
+    $resultat = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    $totalVentes = (int) ($resultat["total"] ?? 0);
+
+
+    /* CHIFFRE D'AFFAIRES */
+
+    $stmt = $pdo->query("
+        SELECT COALESCE(SUM(montant), 0) AS total
+        FROM vente
+    ");
+
+    $resultat = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    $chiffreAffaires = (float) ($resultat["total"] ?? 0);
+
+
+    /* VENTES DU MOIS */
+
+    $stmt = $pdo->query("
+        SELECT COUNT(*) AS total
+        FROM vente
+        WHERE MONTH(date_vente) = MONTH(CURRENT_DATE())
+        AND YEAR(date_vente) = YEAR(CURRENT_DATE())
+    ");
+
+    $resultat = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    $ventesMois = (int) ($resultat["total"] ?? 0);
+
+
+    /* VENTES AUJOURD'HUI */
+
+    $stmt = $pdo->query("
+        SELECT COUNT(*) AS total
+        FROM vente
+        WHERE DATE(date_vente) = CURRENT_DATE()
+    ");
+
+    $resultat = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    $ventesAujourdhui = (int) ($resultat["total"] ?? 0);
+
 } catch (PDOException $e) {
-    // En cas d'erreur silencieuse pour ne pas bloquer l'affichage
-    $erreurAutomatisation = $e->getMessage();
+
+    $messageErreur = "Erreur statistiques : " . $e->getMessage();
 }
 
-// -------------------------------------------------------------------------
-// STATISTIQUES GLOBALISÉES
-// -------------------------------------------------------------------------
-$stmt = $pdo->query("SELECT COUNT(*) FROM vente");
-$totalVentes = (int) $stmt->fetchColumn();
 
-$stmt = $pdo->query("SELECT COALESCE(SUM(montant), 0) FROM vente");
-$chiffreAffaires = (float) $stmt->fetchColumn();
+/* =========================================================
+   RÉCUPÉRATION DES VENTES
+========================================================= */
 
-$stmt = $pdo->query("
-    SELECT COUNT(*) 
-    FROM vente 
-    WHERE MONTH(date_vente) = MONTH(CURRENT_DATE()) 
-    AND YEAR(date_vente) = YEAR(CURRENT_DATE())
-");
-$ventesMois = (int) $stmt->fetchColumn();
+try {
 
-$stmt = $pdo->query("
-    SELECT COUNT(*) 
-    FROM vente 
-    WHERE DATE(date_vente) = CURRENT_DATE()
-");
-$ventesAujourdHui = (int) $stmt->fetchColumn();
-
-// -------------------------------------------------------------------------
-// REQUÊTE PRINCIPALE DES VENTES
-// -------------------------------------------------------------------------
-$sql = "
-    SELECT 
-        v.id_vente,
-        v.id_commande,
-        v.montant,
-        v.date_vente,
-        c.statut,
-        u.nom,
-        u.prenom,
-        u.telephone
-    FROM vente v
-    INNER JOIN commande c ON v.id_commande = c.id_commande
-    INNER JOIN utilisateurs u ON c.id_utilisateur = u.id_utilisateur
-    ORDER BY v.id_vente DESC
-";
-
-$stmt = $pdo->query($sql);
-$ventes = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-// Fonction pour récupérer les produits d'une vente
-function getProduitsVente($pdo, $idCommande) {
     $sql = "
-        SELECT 
-            p.nom_produit,
-            lc.quantite,
-            lc.prix_unitaire,
-            lc.sous_total
-        FROM ligne_commande lc
-        INNER JOIN produit p ON lc.id_produit = p.id_produit
-        WHERE lc.id_commande = ?
-        ORDER BY lc.id_ligne_commande ASC
+        SELECT
+            v.id_vente,
+            v.id_commande,
+            v.montant,
+            v.date_vente,
+
+            c.id_utilisateur,
+
+            u.nom,
+            u.prenom,
+            u.telephone
+
+        FROM vente v
+
+        LEFT JOIN commande c
+            ON v.id_commande = c.id_commande
+
+        LEFT JOIN utilisateurs u
+            ON c.id_utilisateur = u.id_utilisateur
+
+        WHERE 1 = 1
     ";
+
+
+    $parametres = [];
+
+
+    /* RECHERCHE */
+
+    if ($recherche !== "") {
+
+        $sql .= "
+            AND (
+                u.nom LIKE ?
+                OR u.prenom LIKE ?
+                OR u.telephone LIKE ?
+                OR CAST(v.id_vente AS CHAR) LIKE ?
+                OR CAST(v.id_commande AS CHAR) LIKE ?
+            )
+        ";
+
+        $rechercheSQL = "%" . $recherche . "%";
+
+        $parametres[] = $rechercheSQL;
+        $parametres[] = $rechercheSQL;
+        $parametres[] = $rechercheSQL;
+        $parametres[] = $rechercheSQL;
+        $parametres[] = $rechercheSQL;
+    }
+
+
+    /* DATE DÉBUT */
+
+    if ($dateDebut !== "") {
+
+        $sql .= "
+            AND DATE(v.date_vente) >= ?
+        ";
+
+        $parametres[] = $dateDebut;
+    }
+
+
+    /* DATE FIN */
+
+    if ($dateFin !== "") {
+
+        $sql .= "
+            AND DATE(v.date_vente) <= ?
+        ";
+
+        $parametres[] = $dateFin;
+    }
+
+
+    /* TRI */
+
+    $sql .= "
+        ORDER BY
+            v.date_vente DESC,
+            v.id_vente DESC
+    ";
+
+
     $stmt = $pdo->prepare($sql);
-    $stmt->execute([$idCommande]);
-    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    $stmt->execute($parametres);
+
+    $ventes = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+} catch (PDOException $e) {
+
+    $messageErreur = "Erreur ventes : " . $e->getMessage();
 }
 
-function formatFCFA($montant) {
-    return number_format($montant, 0, ",", " ") . " FCFA";
-}
 ?>
 
 <!DOCTYPE html>
-<html lang="fr">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <!-- Optionnel : Actualise automatiquement la page toutes les 60 secondes -->
-    <meta http-equiv="refresh" content="60">
-    <title>Gestion des ventes</title>
 
-    <link rel="stylesheet" href="bootstrap-5.0.2-dist/css/bootstrap.min.css">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
-    <link rel="stylesheet" href="ventes.css">
+<html lang="fr">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>Gestion des ventes - DORIANE AGROFEED</title>
+
+
+    <link
+        rel="stylesheet"
+        href="bootstrap-5.0.2-dist/css/bootstrap.min.css"
+    >
+
+
+    <link
+        rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"
+    >
+
+
+    <style>
+
+        * {
+            box-sizing: border-box;
+        }
+
+
+        body {
+
+            margin: 0;
+
+            background: #f4f6f9;
+
+            font-family: Arial, Helvetica, sans-serif;
+
+            color: #333;
+        }
+
+
+        /* SIDEBAR */
+
+        .sidebar {
+
+            position: fixed;
+
+            top: 0;
+
+            left: 0;
+
+            width: 250px;
+
+            height: 100vh;
+
+            background:
+                linear-gradient(
+                    180deg,
+                    #145a32,
+                    #0b3d20
+                );
+
+            color: white;
+
+            padding: 20px 15px;
+
+            overflow-y: auto;
+        }
+
+
+        .logo-container {
+
+            text-align: center;
+
+            margin-bottom: 35px;
+        }
+
+
+        .logo-container img {
+
+            width: 85px;
+
+            height: 85px;
+
+            object-fit: contain;
+
+            border-radius: 50%;
+
+            background: white;
+
+            padding: 5px;
+        }
+
+
+        .logo-container h2 {
+
+            font-size: 20px;
+
+            margin-top: 12px;
+
+            font-weight: bold;
+        }
+
+
+        .sidebar a {
+
+            display: flex;
+
+            align-items: center;
+
+            gap: 12px;
+
+            color: white;
+
+            text-decoration: none;
+
+            padding: 14px 15px;
+
+            margin-bottom: 8px;
+
+            border-radius: 8px;
+        }
+
+
+        .sidebar a:hover {
+
+            background: rgba(255, 255, 255, 0.15);
+        }
+
+
+        .sidebar a.active {
+
+            background: #f39c12;
+
+            font-weight: bold;
+        }
+
+
+        /* CONTENU */
+
+        .main-content {
+
+            margin-left: 250px;
+
+            padding: 30px;
+        }
+
+
+        .page-header {
+
+            margin-bottom: 30px;
+        }
+
+
+        .page-header h1 {
+
+            font-size: 28px;
+
+            font-weight: bold;
+        }
+
+
+        .stats-container {
+
+            display: grid;
+
+            grid-template-columns: repeat(4, 1fr);
+
+            gap: 20px;
+
+            margin-bottom: 30px;
+        }
+
+
+        .stat-card {
+
+            background: white;
+
+            border-radius: 12px;
+
+            padding: 22px;
+
+            display: flex;
+
+            justify-content: space-between;
+
+            align-items: center;
+
+            box-shadow:
+                0 4px 15px
+                rgba(0, 0, 0, 0.08);
+        }
+
+
+        .stat-info span {
+
+            color: #777;
+
+            font-size: 14px;
+        }
+
+
+        .stat-info h3 {
+
+            margin: 8px 0 0;
+
+            font-size: 24px;
+        }
+
+
+        .stat-icon {
+
+            width: 55px;
+
+            height: 55px;
+
+            border-radius: 50%;
+
+            display: flex;
+
+            align-items: center;
+
+            justify-content: center;
+
+            font-size: 25px;
+        }
+
+
+        .icon-blue {
+
+            background: #e7f0ff;
+
+            color: #0d6efd;
+        }
+
+
+        .icon-green {
+
+            background: #e6f7ed;
+
+            color: #198754;
+        }
+
+
+        .icon-orange {
+
+            background: #fff0dd;
+
+            color: #fd7e14;
+        }
+
+
+        .icon-red {
+
+            background: #fde8e8;
+
+            color: #dc3545;
+        }
+
+
+        .filter-card,
+        .table-card {
+
+            background: white;
+
+            padding: 20px;
+
+            border-radius: 12px;
+
+            margin-bottom: 25px;
+
+            box-shadow:
+                0 4px 15px
+                rgba(0, 0, 0, 0.07);
+        }
+
+
+        .filter-card form {
+
+            display: flex;
+
+            gap: 12px;
+
+            align-items: end;
+
+            flex-wrap: wrap;
+        }
+
+
+        .filter-group {
+
+            flex: 1;
+
+            min-width: 180px;
+        }
+
+
+        .filter-group label {
+
+            display: block;
+
+            margin-bottom: 6px;
+
+            font-weight: bold;
+        }
+
+
+        .montant {
+
+            color: #198754;
+
+            font-weight: bold;
+        }
+
+
+        .action-buttons {
+
+            display: flex;
+
+            gap: 8px;
+        }
+
+
+        .btn-commande,
+        .btn-imprimer {
+
+            border: none;
+
+            text-decoration: none;
+
+            padding: 8px 12px;
+
+            border-radius: 6px;
+
+            color: white;
+
+            font-size: 13px;
+        }
+
+
+        .btn-commande {
+
+            background: #198754;
+        }
+
+
+        .btn-imprimer {
+
+            background: #0d6efd;
+        }
+
+
+        @media (max-width: 1100px) {
+
+            .stats-container {
+
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+
+        @media (max-width: 768px) {
+
+            .sidebar {
+
+                position: relative;
+
+                width: 100%;
+
+                height: auto;
+            }
+
+
+            .main-content {
+
+                margin-left: 0;
+            }
+
+
+            .stats-container {
+
+                grid-template-columns: 1fr;
+            }
+        }
+
+    </style>
+
 </head>
+
+
 <body>
 
+
 <aside class="sidebar">
-    <div class="logo">
-        <img src="img/WhatsApp Image 2026-07-13 at 12.34.47.jpeg" alt="Logo">
-        <h2>DORIANE<br>AGROFEED</h2>
+
+    <div class="logo-container">
+
+        <img
+            src="img/WhatsApp Image 2026-07-13 at 12.34.47.jpeg"
+            alt="Logo DORIANE AGROFEED"
+        >
+
+        <h2>DORIANE AGROFEED</h2>
+
     </div>
 
-    <ul class="menu">
-        <li>
-            <a href="dashboard.php"><i class="bi bi-speedometer2"></i> Tableau de bord</a>
-        </li>
-        <li>
-            <a href="clients.php"><i class="bi bi-people-fill"></i> Clients</a>
-        </li>
-        <li>
-            <a href="commandes.php"><i class="bi bi-cart-fill"></i> Commandes</a>
-        </li>
-        <li>
-            <a href="produits.php"><i class="bi bi-box-seam-fill"></i> Produits</a>
-        </li>
-        <li class="active">
-            <a href="ventes.php"><i class="bi bi-cash-stack"></i> Ventes</a>
-        </li>
-        <li>
-            <a href="../index.php"><i class="bi bi-house-fill"></i> Aller au site</a>
-        </li>
-        <li>
-            <a href="admin.php"><i class="bi bi-box-arrow-right"></i> Déconnexion</a>
-        </li>
-    </ul>
+
+    <a href="dashboard.php">
+
+        <i class="bi bi-speedometer2"></i>
+
+        Tableau de bord
+
+    </a>
+
+
+    <a href="gestion_site.php">
+
+        <i class="bi bi-globe"></i>
+
+        Gestion du site
+
+    </a>
+
+
+    <a href="clients.php">
+
+        <i class="bi bi-people"></i>
+
+        Clients
+
+    </a>
+
+
+    <a href="commandes.php">
+
+        <i class="bi bi-cart-check"></i>
+
+        Commandes
+
+    </a>
+
+
+    <a href="produits.php">
+
+        <i class="bi bi-box-seam"></i>
+
+        Produits
+
+    </a>
+
+
+    <a
+        href="vente.php"
+        class="active"
+    >
+
+        <i class="bi bi-cash-stack"></i>
+
+        Ventes
+
+    </a>
+
+
+    <a
+        href="index.php"
+        target="_blank"
+    >
+
+        <i class="bi bi-box-arrow-up-right"></i>
+
+        Aller au site
+
+    </a>
+
+
+    <a href="connexion.php">
+
+        <i class="bi bi-box-arrow-right"></i>
+
+        Déconnexion
+
+    </a>
+
 </aside>
 
-<main class="vente-content">
 
-    <div class="vente-header">
-        <div>
-            <h1><i class="bi bi-cash-stack"></i> Gestion des ventes</h1>
-            <p>Consultez et gérez toutes les ventes (mises à jour automatiques)</p>
-        </div>
+<main class="main-content">
+
+
+    <div class="page-header">
+
+        <h1>Gestion des ventes</h1>
+
+        <p>Consultez toutes les ventes enregistrées.</p>
+
     </div>
 
-    <section class="vente-cards">
-        <div class="vente-card card-blue">
-            <div class="card-icon"><i class="bi bi-cart-check-fill"></i></div>
-            <div>
-                <h2><?= $ventesAujourdHui ?></h2>
-                <p>Ventes aujourd'hui</p>
-            </div>
+
+    <?php if ($messageErreur !== ""): ?>
+
+        <div class="alert alert-danger">
+
+            <?= htmlspecialchars($messageErreur) ?>
+
         </div>
 
-        <div class="vente-card card-green">
-            <div class="card-icon"><i class="bi bi-calendar-month-fill"></i></div>
-            <div>
-                <h2><?= $ventesMois ?></h2>
-                <p>Ventes du mois</p>
+    <?php endif; ?>
+
+
+    <section class="stats-container">
+
+
+        <div class="stat-card">
+
+            <div class="stat-info">
+
+                <span>Total des ventes</span>
+
+                <h3>
+
+                    <?= number_format(
+                        $totalVentes,
+                        0,
+                        ",",
+                        " "
+                    ) ?>
+
+                </h3>
+
             </div>
+
+            <div class="stat-icon icon-blue">
+
+                <i class="bi bi-receipt"></i>
+
+            </div>
+
         </div>
 
-        <div class="vente-card card-orange">
-            <div class="card-icon"><i class="bi bi-cash-stack"></i></div>
-            <div>
-                <h2><?= formatFCFA($chiffreAffaires) ?></h2>
-                <p>Chiffre d'affaires</p>
+
+        <div class="stat-card">
+
+            <div class="stat-info">
+
+                <span>Chiffre d'affaires</span>
+
+                <h3>
+
+                    <?= number_format(
+                        $chiffreAffaires,
+                        0,
+                        ",",
+                        " "
+                    ) ?>
+
+                    FCFA
+
+                </h3>
+
             </div>
+
+            <div class="stat-icon icon-green">
+
+                <i class="bi bi-cash-stack"></i>
+
+            </div>
+
         </div>
 
-        <div class="vente-card card-purple">
-            <div class="card-icon"><i class="bi bi-receipt-cutoff"></i></div>
-            <div>
-                <h2><?= $totalVentes ?></h2>
-                <p>Total des ventes</p>
+
+        <div class="stat-card">
+
+            <div class="stat-info">
+
+                <span>Ventes du mois</span>
+
+                <h3>
+
+                    <?= $ventesMois ?>
+
+                </h3>
+
             </div>
+
+            <div class="stat-icon icon-orange">
+
+                <i class="bi bi-calendar-month"></i>
+
+            </div>
+
         </div>
+
+
+        <div class="stat-card">
+
+            <div class="stat-info">
+
+                <span>Ventes aujourd'hui</span>
+
+                <h3>
+
+                    <?= $ventesAujourdhui ?>
+
+                </h3>
+
+            </div>
+
+            <div class="stat-icon icon-red">
+
+                <i class="bi bi-calendar-day"></i>
+
+            </div>
+
+        </div>
+
+
     </section>
 
-    <section class="vente-container">
-        <div class="vente-title">
-            <div>
-                <h2><i class="bi bi-list-ul"></i> Liste des ventes</h2>
-                <p>Toutes les ventes enregistrées</p>
+
+    <!-- FILTRES -->
+
+    <section class="filter-card">
+
+        <form
+            method="GET"
+            action="ventes.php"
+        >
+
+            <div class="filter-group">
+
+                <label>Rechercher</label>
+
+                <input
+                    type="text"
+                    name="recherche"
+                    class="form-control"
+                    placeholder="Client, téléphone, commande..."
+                    value="<?= htmlspecialchars($recherche) ?>"
+                >
+
             </div>
 
-            <div class="recherche">
+
+            <div class="filter-group">
+
+                <label>Date de début</label>
+
+                <input
+                    type="date"
+                    name="date_debut"
+                    class="form-control"
+                    value="<?= htmlspecialchars($dateDebut) ?>"
+                >
+
+            </div>
+
+
+            <div class="filter-group">
+
+                <label>Date de fin</label>
+
+                <input
+                    type="date"
+                    name="date_fin"
+                    class="form-control"
+                    value="<?= htmlspecialchars($dateFin) ?>"
+                >
+
+            </div>
+
+
+            <button
+                type="submit"
+                class="btn btn-success"
+            >
+
                 <i class="bi bi-search"></i>
-                <input type="search" id="recherche" placeholder="Rechercher une vente...">
-            </div>
-        </div>
 
-        <div class="table-wrapper">
-            <table class="vente-table" id="tableVentes">
-                <thead>
-                    <tr>
-                        <th>N° Facture</th>
-                        <th>Client</th>
-                        <th>Produits</th>
-                        <th>Quantités</th>
-                        <th>Montants</th>
-                        <th>Total</th>
-                        <th>Date</th>
-                        <th>Statut</th>
-                        <th>Facture</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                <?php if (empty($ventes)): ?>
-                    <tr>
-                        <td colspan="10" class="aucune-vente">
-                            <i class="bi bi-receipt"></i>
-                            <p>Aucune vente enregistrée.</p>
-                        </td>
-                    </tr>
-                <?php else: ?>
-                    <?php foreach ($ventes as $vente): ?>
-                        <?php $produitsVente = getProduitsVente($pdo, $vente["id_commande"]); ?>
-                        <tr class="ligne-vente">
-                            <td>
-                                <strong class="numero-facture">
-                                    FAC-<?= str_pad($vente["id_vente"], 4, "0", STR_PAD_LEFT) ?>
-                                </strong>
-                            </td>
+                Rechercher
 
-                            <td>
-                                <div class="client">
-                                    <div class="client-icon"><i class="bi bi-person-fill"></i></div>
-                                    <div>
-                                        <strong><?= htmlspecialchars($vente["nom"] . " " . $vente["prenom"]) ?></strong>
-                                        <?php if (!empty($vente["telephone"])): ?>
-                                            <br><small><?= htmlspecialchars($vente["telephone"]) ?></small>
-                                        <?php endif; ?>
-                                    </div>
-                                </div>
-                            </td>
+            </button>
 
-                            <td class="produits-cell">
-                                <?php foreach ($produitsVente as $produit): ?>
-                                    <div class="produit-item">
-                                        <i class="bi bi-box-seam"></i> <?= htmlspecialchars($produit["nom_produit"]) ?>
-                                    </div>
-                                <?php endforeach; ?>
-                            </td>
+        </form>
 
-                            <td class="quantites-cell">
-                                <?php foreach ($produitsVente as $produit): ?>
-                                    <div class="quantite-item"><?= $produit["quantite"] ?></div>
-                                <?php endforeach; ?>
-                            </td>
-
-                            <td class="montants-cell">
-                                <?php foreach ($produitsVente as $produit): ?>
-                                    <div class="montant-item"><?= formatFCFA($produit["sous_total"]) ?></div>
-                                <?php endforeach; ?>
-                            </td>
-
-                            <td>
-                                <strong class="total-vente"><?= formatFCFA($vente["montant"]) ?></strong>
-                            </td>
-
-                            <td>
-                                <span class="date-vente">
-                                    <?= date("d/m/Y", strtotime($vente["date_vente"])) ?>
-                                    <br><small><?= date("H:i", strtotime($vente["date_vente"])) ?></small>
-                                </span>
-                            </td>
-
-                            <td>
-                                <?php
-                                $statut = $vente["statut"];
-                                $classeStatut = match ($statut) {
-                                    "Livrée" => "statut-livree",
-                                    "Validée" => "statut-livree",
-                                    "En attente" => "statut-attente",
-                                    "Annulée" => "statut-annulee",
-                                    default => "statut-autre",
-                                };
-                                ?>
-                                <span class="statut <?= $classeStatut ?>">
-                                    <?= htmlspecialchars($statut) ?>
-                                </span>
-                            </td>
-
-                            <td>
-                                <a href="facture.php?id=<?= $vente["id_vente"] ?>" target="_blank" class="btn-imprimer">
-                                    <i class="bi bi-printer-fill"></i> Imprimer
-                                </a>
-                            </td>
-
-                            <td>
-                                <div class="actions">
-                                    <a href="modifier_vente.php?id=<?= $vente["id_vente"] ?>" class="btn-modifier" title="Modifier">
-                                        <i class="bi bi-pencil-fill"></i>
-                                    </a>
-                                    <a href="supprimer_vente.php?id=<?= $vente="id_vente" ?>" class="btn-supprimer" title="Supprimer" onclick="return confirm('Voulez-vous vraiment supprimer cette vente ?');">
-                                        <i class="bi bi-trash-fill"></i>
-                                    </a>
-                                </div>
-                            </td>
-                        </tr>
-                    <?php endforeach; ?>
-                <?php endif; ?>
-                </tbody>
-            </table>
-        </div>
     </section>
+
+
+    <!-- TABLEAU -->
+
+    <section class="table-card">
+
+        <h3>
+
+            <i class="bi bi-list-ul"></i>
+
+            Liste des ventes
+
+            <span class="text-muted fs-6">
+
+                (<?= count($ventes) ?> résultat(s))
+
+            </span>
+
+        </h3>
+
+
+        <div class="table-responsive">
+
+            <table class="table table-hover">
+
+                <thead>
+
+                    <tr>
+
+                        <th>N° Vente</th>
+
+                        <th>Commande</th>
+
+                        <th>Client</th>
+
+                        <th>Téléphone</th>
+
+                        <th>Montant</th>
+
+                        <th>Date</th>
+
+                        <th>Actions</th>
+
+                    </tr>
+
+                </thead>
+
+
+                <tbody>
+
+
+                <?php if (!empty($ventes)): ?>
+
+
+                    <?php foreach ($ventes as $vente): ?>
+
+
+                        <?php
+
+                        $nomComplet = trim(
+                            ($vente["nom"] ?? "")
+                            . " "
+                            . ($vente["prenom"] ?? "")
+                        );
+
+                        if ($nomComplet === "") {
+                            $nomComplet = "Client non renseigné";
+                        }
+
+                        ?>
+
+
+                        <tr>
+
+
+                            <td>
+
+                                <strong>
+
+                                    #<?= (int) $vente["id_vente"] ?>
+
+                                </strong>
+
+                            </td>
+
+
+                            <td>
+
+                                #<?= (int) $vente["id_commande"] ?>
+
+                            </td>
+
+
+                            <td>
+
+                                <?= htmlspecialchars($nomComplet) ?>
+
+                            </td>
+
+
+                            <td>
+
+                                <?= htmlspecialchars(
+                                    $vente["telephone"] ?? "—"
+                                ) ?>
+
+                            </td>
+
+
+                            <td>
+
+                                <span class="montant">
+
+                                    <?= number_format(
+                                        (float) $vente["montant"],
+                                        0,
+                                        ",",
+                                        " "
+                                    ) ?>
+
+                                    FCFA
+
+                                </span>
+
+                            </td>
+
+
+                            <td>
+
+                                <?php
+
+                                if (!empty($vente["date_vente"])) {
+
+                                    echo date(
+                                        "d/m/Y H:i",
+                                        strtotime($vente["date_vente"])
+                                    );
+
+                                } else {
+
+                                    echo "—";
+
+                                }
+
+                                ?>
+
+                            </td>
+
+
+                            <td>
+
+                                <div class="action-buttons">
+
+
+                                    <a
+                                        href="commandes.php?id=<?= (int) $vente["id_commande"] ?>"
+                                        class="btn-commande"
+                                    >
+
+                                        <i class="bi bi-eye"></i>
+
+                                        Commande
+
+                                    </a>
+
+
+                                    <!--
+                                        IMPORTANT :
+                                        ON ENVOIE ID_VENTE
+                                    -->
+
+                                    <a
+                                        href="facture.php?id_vente=<?= (int) $vente["id_vente"] ?>"
+                                        class="btn-imprimer"
+                                        target="_blank"
+                                    >
+
+                                        <i class="bi bi-printer"></i>
+
+                                        Imprimer
+
+                                    </a>
+
+
+                                </div>
+
+                            </td>
+
+
+                        </tr>
+
+
+                    <?php endforeach; ?>
+
+
+                <?php else: ?>
+
+
+                    <tr>
+
+                        <td
+                            colspan="7"
+                            class="text-center text-muted py-5"
+                        >
+
+                            <i
+                                class="bi bi-cash-stack"
+                                style="font-size:40px;"
+                            ></i>
+
+                            <br><br>
+
+                            Aucune vente trouvée.
+
+                        </td>
+
+                    </tr>
+
+
+                <?php endif; ?>
+
+
+                </tbody>
+
+            </table>
+
+        </div>
+
+    </section>
+
 
 </main>
 
-<script>
-const recherche = document.getElementById("recherche");
 
-recherche.addEventListener("input", function () {
-    const texte = this.value.toLowerCase();
-    const lignes = document.querySelectorAll(".ligne-vente");
+<script src="bootstrap-5.0.2-dist/js/bootstrap.bundle.min.js"></script>
 
-    lignes.forEach(function (ligne) {
-        const contenu = ligne.textContent.toLowerCase();
-        ligne.style.display = contenu.includes(texte) ? "" : "none";
-    });
-});
-</script>
 
 </body>
+
 </html>

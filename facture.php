@@ -1,131 +1,217 @@
 <?php
 
+session_start();
+
 require_once "connexions.php";
 
-/* =====================================================
-   RÉCUPÉRER L'ID DE LA VENTE
-===================================================== */
 
-$idVente = isset($_GET["id"])
-    ? intval($_GET["id"])
+/* =========================================================
+   RÉCUPÉRER L'ID DE LA VENTE
+========================================================= */
+
+$idVente = isset($_GET["id_vente"])
+    ? (int) $_GET["id_vente"]
     : 0;
 
+
+/* =========================================================
+   VÉRIFICATION
+========================================================= */
+
 if ($idVente <= 0) {
+
     die("Facture introuvable.");
+
 }
 
 
-/* =====================================================
-   RÉCUPÉRER LA VENTE + CLIENT
-===================================================== */
+/* =========================================================
+   INITIALISATION
+========================================================= */
 
-$sql = "
+$facture = null;
 
-    SELECT
-        v.id_vente,
-        v.id_commande,
-        v.montant,
-        v.date_vente,
+$produits = [];
 
-        c.statut,
-
-        u.id_utilisateur,
-        u.nom,
-        u.prenom,
-        u.telephone,
-        u.email
-
-    FROM vente v
-
-    INNER JOIN commande c
-        ON v.id_commande = c.id_commande
-
-    INNER JOIN utilisateurs u
-        ON c.id_utilisateur = u.id_utilisateur
-
-    WHERE v.id_vente = ?
-
-";
+$messageErreur = "";
 
 
-$stmt = $pdo->prepare($sql);
+/* =========================================================
+   RÉCUPÉRER LES INFORMATIONS DE LA VENTE
+========================================================= */
 
-$stmt->execute([
-    $idVente
-]);
+try {
 
-$vente = $stmt->fetch(
-    PDO::FETCH_ASSOC
-);
+    $sql = "
+
+        SELECT
+
+            v.id_vente,
+
+            v.id_commande,
+
+            v.montant,
+
+            v.date_vente,
 
 
-if (!$vente) {
-    die("Cette facture n'existe pas.");
+            c.id_utilisateur,
+
+            c.date_commande,
+
+
+            u.nom,
+
+            u.prenom,
+
+            u.telephone
+
+
+        FROM vente v
+
+
+        LEFT JOIN commande c
+
+            ON v.id_commande = c.id_commande
+
+
+        LEFT JOIN utilisateurs u
+
+            ON c.id_utilisateur = u.id_utilisateur
+
+
+        WHERE v.id_vente = ?
+
+        LIMIT 1
+
+    ";
+
+
+    $stmt = $pdo->prepare($sql);
+
+    $stmt->execute([$idVente]);
+
+    $facture = $stmt->fetch(PDO::FETCH_ASSOC);
+
+
+    /* =====================================================
+       SI LA VENTE N'EXISTE PAS
+    ===================================================== */
+
+    if (!$facture) {
+
+        die("Facture introuvable.");
+
+    }
+
+
+} catch (PDOException $e) {
+
+    die(
+        "Erreur lors du chargement de la facture : "
+        . htmlspecialchars($e->getMessage())
+    );
+
 }
 
 
-/* =====================================================
-   RÉCUPÉRER LES PRODUITS
-===================================================== */
+/* =========================================================
+   RÉCUPÉRER LES PRODUITS DE LA COMMANDE
+========================================================= */
 
-$sqlProduits = "
+try {
 
-    SELECT
+    $sqlProduits = "
 
-        p.nom_produit,
-        lc.quantite,
-        lc.prix_unitaire,
-        lc.sous_total
+        SELECT
 
-    FROM ligne_commande lc
+            lc.quantite,
 
-    INNER JOIN produit p
-        ON lc.id_produit = p.id_produit
-
-    WHERE lc.id_commande = ?
-
-    ORDER BY lc.id_ligne_commande ASC
-
-";
+            lc.prix_unitaire,
 
 
-$stmtProduits =
-    $pdo->prepare($sqlProduits);
+            p.nom_produit
 
-$stmtProduits->execute([
-    $vente["id_commande"]
-]);
 
-$produits =
-    $stmtProduits->fetchAll(
+        FROM ligne_commande lc
+
+
+        LEFT JOIN produit p
+
+            ON lc.id_produit = p.id_produit
+
+
+        WHERE lc.id_commande = ?
+
+    ";
+
+
+    $stmtProduits = $pdo->prepare($sqlProduits);
+
+    $stmtProduits->execute([
+        $facture["id_commande"]
+    ]);
+
+    $produits = $stmtProduits->fetchAll(
         PDO::FETCH_ASSOC
     );
 
 
-/* =====================================================
-   NUMÉRO DE FACTURE
-===================================================== */
+} catch (PDOException $e) {
 
-$numeroFacture =
-    "FAC-" .
-    str_pad(
-        $vente["id_vente"],
-        4,
-        "0",
-        STR_PAD_LEFT
-    );
+    /*
+        On ne bloque pas complètement la facture
+        si la structure des lignes de commande
+        est différente.
+    */
+
+    $messageErreur =
+        "Impossible de charger les produits : "
+        . $e->getMessage();
+
+}
 
 
-/* =====================================================
-   DATE
-===================================================== */
+/* =========================================================
+   NOM COMPLET DU CLIENT
+========================================================= */
 
-$dateFacture = date(
-    "d/m/Y",
-    strtotime(
-        $vente["date_vente"]
-    )
+$nomClient = trim(
+
+    ($facture["nom"] ?? "")
+    . " "
+    . ($facture["prenom"] ?? "")
+
 );
+
+
+if ($nomClient === "") {
+
+    $nomClient = "Client non renseigné";
+
+}
+
+
+/* =========================================================
+   TOTAL DES PRODUITS
+========================================================= */
+
+$totalProduits = 0;
+
+
+foreach ($produits as $produit) {
+
+    $quantite =
+        (float) ($produit["quantite"] ?? 0);
+
+    $prix =
+        (float) ($produit["prix_unitaire"] ?? 0);
+
+
+    $totalProduits +=
+        $quantite * $prix;
+
+}
 
 ?>
 
@@ -135,25 +221,423 @@ $dateFacture = date(
 
 <head>
 
-<meta charset="UTF-8">
+    <meta charset="UTF-8">
 
-<meta
-    name="viewport"
-    content="width=device-width, initial-scale=1.0">
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
 
-<title>
-    <?= $numeroFacture ?>
-</title>
+    <title>
+
+        Facture #<?= (int) $facture["id_vente"] ?>
+
+        - DORIANE AGROFEED
+
+    </title>
 
 
-<link
-    rel="stylesheet"
-    href="facture.css">
+    <link
+        rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"
+    >
 
 
-<link
-    rel="stylesheet"
-    href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+    <style>
+
+        * {
+
+            box-sizing: border-box;
+
+        }
+
+
+        body {
+
+            margin: 0;
+
+            padding: 30px;
+
+            background: #f1f3f5;
+
+            font-family:
+                Arial,
+                Helvetica,
+                sans-serif;
+
+            color: #222;
+
+        }
+
+
+        .facture {
+
+            width: 100%;
+
+            max-width: 900px;
+
+            margin: auto;
+
+            background: white;
+
+            padding: 45px;
+
+            box-shadow:
+                0 5px 25px
+                rgba(0, 0, 0, 0.1);
+
+        }
+
+
+        /* EN-TÊTE */
+
+        .header {
+
+            display: flex;
+
+            justify-content: space-between;
+
+            align-items: flex-start;
+
+            border-bottom:
+                3px solid #145a32;
+
+            padding-bottom: 25px;
+
+            margin-bottom: 30px;
+
+        }
+
+
+        .entreprise h1 {
+
+            color: #145a32;
+
+            margin: 0 0 10px;
+
+            font-size: 26px;
+
+        }
+
+
+        .entreprise p {
+
+            margin: 5px 0;
+
+            color: #555;
+
+        }
+
+
+        .titre-facture {
+
+            text-align: right;
+
+        }
+
+
+        .titre-facture h2 {
+
+            margin: 0;
+
+            color: #333;
+
+            font-size: 30px;
+
+        }
+
+
+        .titre-facture p {
+
+            color: #666;
+
+        }
+
+
+        /* CLIENT */
+
+        .info-container {
+
+            display: grid;
+
+            grid-template-columns:
+                repeat(2, 1fr);
+
+            gap: 25px;
+
+            margin-bottom: 30px;
+
+        }
+
+
+        .info-box {
+
+            background: #f8f9fa;
+
+            padding: 20px;
+
+            border-radius: 8px;
+
+        }
+
+
+        .info-box h3 {
+
+            margin-top: 0;
+
+            color: #145a32;
+
+            font-size: 17px;
+
+        }
+
+
+        .info-box p {
+
+            margin: 8px 0;
+
+        }
+
+
+        /* TABLEAU */
+
+        table {
+
+            width: 100%;
+
+            border-collapse: collapse;
+
+            margin-top: 25px;
+
+        }
+
+
+        th {
+
+            background: #145a32;
+
+            color: white;
+
+            padding: 13px;
+
+            text-align: left;
+
+        }
+
+
+        td {
+
+            padding: 13px;
+
+            border-bottom:
+                1px solid #ddd;
+
+        }
+
+
+        .text-center {
+
+            text-align: center;
+
+        }
+
+
+        .text-right {
+
+            text-align: right;
+
+        }
+
+
+        /* TOTAL */
+
+        .total-container {
+
+            display: flex;
+
+            justify-content: flex-end;
+
+            margin-top: 30px;
+
+        }
+
+
+        .total-box {
+
+            width: 350px;
+
+        }
+
+
+        .total-ligne {
+
+            display: flex;
+
+            justify-content: space-between;
+
+            padding: 12px 0;
+
+        }
+
+
+        .total-final {
+
+            border-top:
+                2px solid #145a32;
+
+            font-size: 22px;
+
+            font-weight: bold;
+
+            color: #145a32;
+
+        }
+
+
+        /* BOUTONS */
+
+        .actions {
+
+            display: flex;
+
+            justify-content: center;
+
+            gap: 15px;
+
+            margin-top: 40px;
+
+        }
+
+
+        .btn {
+
+            border: none;
+
+            padding: 12px 22px;
+
+            border-radius: 6px;
+
+            cursor: pointer;
+
+            text-decoration: none;
+
+            font-size: 15px;
+
+        }
+
+
+        .btn-imprimer {
+
+            background: #145a32;
+
+            color: white;
+
+        }
+
+
+        .btn-retour {
+
+            background: #6c757d;
+
+            color: white;
+
+        }
+
+
+        /* PIED */
+
+        .footer {
+
+            text-align: center;
+
+            margin-top: 50px;
+
+            padding-top: 20px;
+
+            border-top:
+                1px solid #ddd;
+
+            color: #777;
+
+            font-size: 13px;
+
+        }
+
+
+        /* IMPRESSION */
+
+        @media print {
+
+            body {
+
+                background: white;
+
+                padding: 0;
+
+            }
+
+
+            .facture {
+
+                box-shadow: none;
+
+                width: 100%;
+
+                max-width: none;
+
+            }
+
+
+            .actions {
+
+                display: none;
+
+            }
+
+        }
+
+
+        @media (max-width: 700px) {
+
+            body {
+
+                padding: 10px;
+
+            }
+
+
+            .facture {
+
+                padding: 20px;
+
+            }
+
+
+            .header {
+
+                flex-direction: column;
+
+                gap: 20px;
+
+            }
+
+
+            .titre-facture {
+
+                text-align: left;
+
+            }
+
+
+            .info-container {
+
+                grid-template-columns: 1fr;
+
+            }
+
+        }
+
+    </style>
 
 </head>
 
@@ -161,199 +645,263 @@ $dateFacture = date(
 <body>
 
 
-<!-- =====================================================
-     FACTURE
-===================================================== -->
-
 <div class="facture">
 
 
     <!-- =================================================
-         TITRE
-    ================================================== -->
+         EN-TÊTE
+    ================================================= -->
 
-    <div class="titre-facture">
+    <div class="header">
 
-        FACTURE N°
-
-        <span>
-            <?= htmlspecialchars(
-                $numeroFacture
-            ) ?>
-        </span>
-
-    </div>
-
-
-    <!-- =================================================
-         INFORMATIONS ENTREPRISE + CLIENT
-    ================================================== -->
-
-    <div class="entete">
-
-
-        <!-- ENTREPRISE -->
 
         <div class="entreprise">
 
             <h1>
+
                 DORIANE AGROFEED
+
             </h1>
 
-            <p>
-                Provenderie
-            </p>
 
             <p>
-                Bafoussam, Cameroun
+
+                Votre provenderie de confiance
+
             </p>
 
-            <p>
-                Marché B – Première rue
-            </p>
 
             <p>
-                Tél : <?= htmlspecialchars(
-                    "À compléter"
-                ) ?>
+
+                Bafoussam - Cameroun
+
+            </p>
+
+
+            <p>
+
+                Marché B, première rue
+
             </p>
 
         </div>
 
 
-        <!-- CLIENT -->
+        <div class="titre-facture">
 
-        <div class="client-box">
+            <h2>
 
-            <h3>
-                INFORMATIONS CLIENT
-            </h3>
+                FACTURE
+
+            </h2>
+
 
             <p>
 
                 <strong>
-                    <?= htmlspecialchars(
-                        $vente["nom"]
-                        . " "
-                        . $vente["prenom"]
-                    ) ?>
+
+                    N° Vente :
+
                 </strong>
+
+                #<?= (int) $facture["id_vente"] ?>
 
             </p>
 
 
-            <?php if (
-                !empty(
-                    $vente["telephone"]
-                )
-            ): ?>
+            <p>
 
-                <p>
+                <strong>
+
+                    N° Commande :
+
+                </strong>
+
+                #<?= (int) $facture["id_commande"] ?>
+
+            </p>
+
+
+            <p>
+
+                <strong>
+
+                    Date :
+
+                </strong>
+
+
+                <?php
+
+                if (!empty($facture["date_vente"])) {
+
+                    echo date(
+                        "d/m/Y H:i",
+                        strtotime(
+                            $facture["date_vente"]
+                        )
+                    );
+
+                } else {
+
+                    echo "—";
+
+                }
+
+                ?>
+
+            </p>
+
+        </div>
+
+
+    </div>
+
+
+    <!-- =================================================
+         INFORMATIONS
+    ================================================= -->
+
+    <div class="info-container">
+
+
+        <!-- CLIENT -->
+
+        <div class="info-box">
+
+            <h3>
+
+                Informations du client
+
+            </h3>
+
+
+            <p>
+
+                <strong>
+
+                    Nom :
+
+                </strong>
+
+                <?= htmlspecialchars($nomClient) ?>
+
+            </p>
+
+
+            <p>
+
+                <strong>
 
                     Téléphone :
 
-                    <?= htmlspecialchars(
-                        $vente["telephone"]
-                    ) ?>
+                </strong>
 
-                </p>
+                <?= htmlspecialchars(
+                    $facture["telephone"]
+                    ?? "Non renseigné"
+                ) ?>
 
-            <?php endif; ?>
-
-
-            <?php if (
-                !empty(
-                    $vente["email"]
-                )
-            ): ?>
-
-                <p>
-
-                    Email :
-
-                    <?= htmlspecialchars(
-                        $vente["email"]
-                    ) ?>
-
-                </p>
-
-            <?php endif; ?>
+            </p>
 
         </div>
+
+
+        <!-- COMMANDE -->
+
+        <div class="info-box">
+
+            <h3>
+
+                Informations de la commande
+
+            </h3>
+
+
+            <p>
+
+                <strong>
+
+                    N° Commande :
+
+                </strong>
+
+                #<?= (int) $facture["id_commande"] ?>
+
+            </p>
+
+
+            <p>
+
+                <strong>
+
+                    N° Vente :
+
+                </strong>
+
+                #<?= (int) $facture["id_vente"] ?>
+
+            </p>
+
+        </div>
+
 
     </div>
 
 
     <!-- =================================================
-         INFORMATIONS COMMANDE
-    ================================================== -->
+         PRODUITS
+    ================================================= -->
 
-    <div class="infos-commande">
+    <h3>
 
-        <div>
+        Détails de la commande
 
-            <strong>
-                Date de livraison :
-            </strong>
-
-            <?= $dateFacture ?>
-
-        </div>
+    </h3>
 
 
-        <div>
+    <?php if ($messageErreur !== ""): ?>
 
-            <strong>
-                Date de facturation :
-            </strong>
 
-            <?= $dateFacture ?>
+        <div style="
+            background:#fff3cd;
+            padding:15px;
+            margin-bottom:20px;
+        ">
+
+            <?= htmlspecialchars($messageErreur) ?>
 
         </div>
 
 
-        <div>
-
-            <strong>
-                Référence :
-            </strong>
-
-            CMD-<?= str_pad(
-                $vente["id_commande"],
-                4,
-                "0",
-                STR_PAD_LEFT
-            ) ?>
-
-        </div>
-
-    </div>
+    <?php endif; ?>
 
 
-    <!-- =================================================
-         TABLEAU DES PRODUITS
-    ================================================== -->
+    <table>
 
-    <table class="table-facture">
 
         <thead>
 
             <tr>
 
-                <th class="col-quantite">
+                <th>Produit</th>
+
+                <th class="text-center">
+
                     Quantité
+
                 </th>
 
-                <th>
-                    Désignation
-                </th>
+                <th class="text-right">
 
-                <th class="col-prix">
                     Prix unitaire
+
                 </th>
 
-                <th class="col-total">
-                    Montant
+                <th class="text-right">
+
+                    Total
+
                 </th>
 
             </tr>
@@ -364,128 +912,129 @@ $dateFacture = date(
         <tbody>
 
 
-        <?php if (
-            empty($produits)
-        ): ?>
-
-            <tr>
-
-                <td
-                    colspan="4"
-                    class="aucun-produit">
-
-                    Aucun produit
-
-                </td>
-
-            </tr>
-
-        <?php else: ?>
+            <?php if (!empty($produits)): ?>
 
 
-            <?php foreach (
-                $produits
-                as
-                $produit
-            ): ?>
+                <?php foreach ($produits as $produit): ?>
+
+
+                    <?php
+
+                    $quantite =
+                        (float) ($produit["quantite"] ?? 0);
+
+                    $prix =
+                        (float) ($produit["prix_unitaire"] ?? 0);
+
+                    $total =
+                        $quantite * $prix;
+
+                    ?>
+
+
+                    <tr>
+
+
+                        <td>
+
+                            <?= htmlspecialchars(
+                                $produit["nom_produit"]
+                                ?? "Produit inconnu"
+                            ) ?>
+
+                        </td>
+
+
+                        <td class="text-center">
+
+                            <?= $quantite ?>
+
+                        </td>
+
+
+                        <td class="text-right">
+
+                            <?= number_format(
+                                $prix,
+                                0,
+                                ",",
+                                " "
+                            ) ?>
+
+                            FCFA
+
+                        </td>
+
+
+                        <td class="text-right">
+
+                            <?= number_format(
+                                $total,
+                                0,
+                                ",",
+                                " "
+                            ) ?>
+
+                            FCFA
+
+                        </td>
+
+
+                    </tr>
+
+
+                <?php endforeach; ?>
+
+
+            <?php else: ?>
+
 
                 <tr>
 
+                    <td
+                        colspan="4"
+                        class="text-center"
+                    >
 
-                    <!-- QUANTITÉ -->
-
-                    <td class="quantite-cell">
-
-                        <?= htmlspecialchars(
-                            $produit[
-                                "quantite"
-                            ]
-                        ) ?>
-
-                    </td>
-
-
-                    <!-- DÉSIGNATION -->
-
-                    <td>
-
-                        <?= htmlspecialchars(
-                            $produit[
-                                "nom_produit"
-                            ]
-                        ) ?>
-
-                    </td>
-
-
-                    <!-- PRIX UNITAIRE -->
-
-                    <td class="prix-cell">
-
-                        <?= number_format(
-                            $produit[
-                                "prix_unitaire"
-                            ],
-                            0,
-                            ",",
-                            " "
-                        ) ?>
-
-                        FCFA
-
-                    </td>
-
-
-                    <!-- MONTANT -->
-
-                    <td class="montant-cell">
-
-                        <?= number_format(
-                            $produit[
-                                "sous_total"
-                            ],
-                            0,
-                            ",",
-                            " "
-                        ) ?>
-
-                        FCFA
+                        Aucun produit trouvé pour cette commande.
 
                     </td>
 
                 </tr>
 
-            <?php endforeach; ?>
 
-
-        <?php endif; ?>
+            <?php endif; ?>
 
 
         </tbody>
+
 
     </table>
 
 
     <!-- =================================================
          TOTAL
-    ================================================== -->
+    ================================================= -->
 
-    <div class="total-zone">
+    <div class="total-container">
 
 
         <div class="total-box">
 
 
-            <div class="ligne-total">
+            <div class="total-ligne">
 
                 <span>
-                    Sous-total
+
+                    Total de la vente
+
                 </span>
+
 
                 <strong>
 
                     <?= number_format(
-                        $vente["montant"],
+                        (float) $facture["montant"],
                         0,
                         ",",
                         " "
@@ -498,29 +1047,24 @@ $dateFacture = date(
             </div>
 
 
-            <div class="ligne-total">
+            <div
+                class="
+                    total-ligne
+                    total-final
+                "
+            >
 
                 <span>
-                    TVA
+
+                    TOTAL À PAYER
+
                 </span>
 
-                <strong>
-                    0 FCFA
-                </strong>
-
-            </div>
-
-
-            <div class="total-final">
 
                 <span>
-                    TOTAL TTC
-                </span>
-
-                <strong>
 
                     <?= number_format(
-                        $vente["montant"],
+                        (float) $facture["montant"],
                         0,
                         ",",
                         " "
@@ -528,104 +1072,69 @@ $dateFacture = date(
 
                     FCFA
 
-                </strong>
+                </span>
 
             </div>
 
 
         </div>
 
-    </div>
-
-
-    <!-- =================================================
-         STATUT
-    ================================================== -->
-
-    <div class="statut">
-
-        Statut de la commande :
-
-        <strong>
-
-            <?= htmlspecialchars(
-                $vente["statut"]
-            ) ?>
-
-        </strong>
 
     </div>
 
 
     <!-- =================================================
-         MESSAGE
-    ================================================== -->
+         BOUTONS
+    ================================================= -->
 
-    <div class="message">
+    <div class="actions">
 
-        <p>
-            Nous vous remercions pour votre confiance.
-        </p>
 
-        <p>
-            DORIANE AGROFEED vous accompagne
-            dans l'alimentation et l'élevage des animaux.
-        </p>
+        <a
+            href="vente.php"
+            class="btn btn-retour"
+        >
+
+            <i class="bi bi-arrow-left"></i>
+
+            Retour
+
+        </a>
+
+
+        <button
+            type="button"
+            class="btn btn-imprimer"
+            onclick="window.print()"
+        >
+
+            <i class="bi bi-printer"></i>
+
+            Imprimer la facture
+
+        </button>
+
 
     </div>
 
 
     <!-- =================================================
-         SIGNATURE
-    ================================================== -->
+         PIED DE PAGE
+    ================================================= -->
 
-    <div class="signature">
+    <div class="footer">
 
-        <div>
+        Merci pour votre confiance.
 
-            <strong>
-                DORIANE AGROFEED
-            </strong>
+        <br>
 
-            <br>
-
-            La direction
-
-        </div>
-
-
-        <div>
-
-            Signature du client
-
-        </div>
+        DORIANE AGROFEED
 
     </div>
 
 
 </div>
-<!-- =====================================================
-     BOUTONS ACTIONS (RETOUR + IMPRIMER)
-===================================================== -->
 
-<div class="zone-impression" style="display: flex; justify-content: center; gap: 15px; margin-top: 20px;">
-
-    <a href="ventes.php" class="btn-retour" style="display: inline-flex; align-items: center; gap: 8px; padding: 10px 20px; background-color: #6c757d; color: white; text-decoration: none; border-radius: 5px; font-weight: bold;">
-        <i class="bi bi-arrow-left"></i> Retour aux ventes
-    </a>
-
-    <button
-        type="button"
-        onclick="window.print()"
-        class="btn-imprimer" style="display: inline-flex; align-items: center; gap: 8px; padding: 10px 20px; background-color: #0d6efd; color: white; border: none; border-radius: 5px; font-weight: bold; cursor: pointer;">
-
-        <i class="bi bi-printer-fill"></i>
-
-        Imprimer la facture
-
-    </button>
-
-</div>
 
 </body>
 
